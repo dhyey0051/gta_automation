@@ -9,6 +9,7 @@ Enforces strict idempotency via SQLite ledger so NO video is ever uploaded twice
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 import threading
@@ -21,7 +22,7 @@ from loguru import logger
 
 from uploader import browser_utils, instagram_uploader, ledger, youtube_uploader
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(".")
 DATA_DIR = BASE_DIR / "data"
 STATE_FILE = DATA_DIR / "bot_state.json"
 
@@ -37,7 +38,7 @@ _LAST_RUN_INFO: Dict[str, Any] = {
     "current_clip": None,
     "pending_count": 0,
     "interval_seconds": DEFAULT_INTERVAL_SECONDS,
-    "seconds_remaining": DEFAULT_INTERVAL_SECONDS,
+    "seconds_remaining": 0,
     "next_upload_at": 0,
     "last_heartbeat": 0,
 }
@@ -47,9 +48,11 @@ def _save_bot_state() -> None:
     """Persist bot state to disk so the Web UI timer widget is always accurate."""
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(_LAST_RUN_INFO, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_LAST_RUN_INFO, indent=2), encoding="utf-8")
+        tmp.replace(STATE_FILE)
+    except Exception as e:
+        logger.debug(f"Failed to save bot state: {e}")
 
 
 def process_next_clip(
@@ -247,7 +250,9 @@ def run_bot_loop(
         logger.info("[Bot] Shutting down upload bot gracefully...")
     finally:
         _BOT_RUNNING = False
-        _LAST_RUN_INFO["status"] = "stopped"
+        _LAST_RUN_INFO["status"] = "paused"
+        _LAST_RUN_INFO["seconds_remaining"] = 0
+        _LAST_RUN_INFO["next_upload_at"] = 0
         _save_bot_state()
         logger.info("[Bot] Upload bot stopped.")
 
@@ -274,9 +279,15 @@ def start_bot_thread(
 
 def stop_bot_thread() -> str:
     """Stop the background upload bot thread."""
+    global _BOT_RUNNING
     if not _BOT_RUNNING:
         return "Upload bot is not running."
     _STOP_EVENT.set()
+    _BOT_RUNNING = False
+    _LAST_RUN_INFO["status"] = "paused"
+    _LAST_RUN_INFO["seconds_remaining"] = 0
+    _LAST_RUN_INFO["next_upload_at"] = 0
+    _save_bot_state()
     return "Stop signal sent to upload bot."
 
 
@@ -295,21 +306,24 @@ def get_bot_status() -> Dict[str, Any]:
 
     info = {**_LAST_RUN_INFO, **disk_state}
     status = info.get("status", "idle")
+    heartbeat = info.get("last_heartbeat", 0)
+    now = time.time()
+
+    # Active if in-process thread is running OR external process sent heartbeat within last 15s
+    is_active = _BOT_RUNNING or (heartbeat > 0 and (now - heartbeat) < 15)
 
     # Accurately compute live remaining seconds
     next_at = info.get("next_upload_at", 0)
-    now = time.time()
-    if next_at and next_at > now and status == "sleeping":
+    if is_active and status == "sleeping" and next_at > now:
         seconds_remaining = max(0, int(next_at - now))
+    elif is_active and status == "uploading":
+        seconds_remaining = 0
     else:
-        seconds_remaining = info.get("seconds_remaining", 0)
-
-    heartbeat = info.get("last_heartbeat", 0)
-    is_active = _BOT_RUNNING or (heartbeat > 0 and (now - heartbeat) < 15)
+        seconds_remaining = 0
 
     return {
         "running": is_active,
-        "status": status,
+        "status": status if is_active else "paused",
         "current_clip": info.get("current_clip"),
         "seconds_remaining": seconds_remaining,
         "interval_seconds": info.get("interval_seconds", DEFAULT_INTERVAL_SECONDS),

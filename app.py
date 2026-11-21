@@ -689,6 +689,18 @@ def bot_status_endpoint():
     from uploader import bot
     return bot.get_bot_status()
 
+@app.post('/bot/start')
+def bot_start_endpoint():
+    from uploader import bot
+    msg = bot.start_bot_thread(interval_seconds=720)
+    return {'ok': True, 'message': msg, 'status': bot.get_bot_status()}
+
+@app.post('/bot/stop')
+def bot_stop_endpoint():
+    from uploader import bot
+    msg = bot.stop_bot_thread()
+    return {'ok': True, 'message': msg, 'status': bot.get_bot_status()}
+
 @app.post('/bot/trigger')
 def bot_trigger_endpoint():
     from uploader import bot

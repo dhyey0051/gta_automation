@@ -87,30 +87,84 @@ if($('url')){$('url').addEventListener('input',()=>{clearTimeout(probeDebounce);
 if($('quick-count')&&$('count')){$('quick-count').onchange=()=>{$('count').value=$('quick-count').value;};$('count').oninput=()=>{$('quick-count').value=$('count').value;};}
 
 // Upload Bot Sidebar live timer & status widget
-let botTimerSecs=720;
-function formatBotTime(secs){const m=Math.floor(secs/60);const s=secs%60;return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;}
+let botTimerSecs=0;
+let botIsRunning=false;
+function formatBotTime(secs){
+ if(!botIsRunning)return 'PAUSED';
+ if(secs<=0)return '00:00';
+ const m=Math.floor(secs/60);
+ const s=secs%60;
+ return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
 async function updateBotWidget(){
  try{
   const s=await request('/bot/status');
+  botIsRunning=!!s.running;
   botTimerSecs=s.seconds_remaining||0;
   if($('bot-queue-count'))$('bot-queue-count').textContent=s.pending_count||0;
   if($('bot-timer-display'))$('bot-timer-display').textContent=formatBotTime(botTimerSecs);
+  if($('bot-toggle-btn')){
+   if(s.running){
+    $('bot-toggle-btn').textContent='⏸ Pause';
+    $('bot-toggle-btn').style.color='#ff9999';
+    $('bot-toggle-btn').style.borderColor='#883344';
+    $('bot-toggle-btn').style.background='#2a141c';
+   }else{
+    $('bot-toggle-btn').textContent='▶ Start';
+    $('bot-toggle-btn').style.color='var(--lime)';
+    $('bot-toggle-btn').style.borderColor='#3c6e3c';
+    $('bot-toggle-btn').style.background='#1e291e';
+   }
+  }
+  const dot=document.querySelector('.live-dot');
+  if(dot){
+   dot.style.background=s.running?'#22c55e':'#666';
+   dot.style.boxShadow=s.running?'0 0 6px #22c55e':'none';
+  }
   if($('bot-badge')){
    if(s.status==='uploading'){$('bot-badge').textContent='UPLOADING';$('bot-badge').style.background='#ff4ba5';$('bot-badge').style.color='#fff';}
    else if(s.running){$('bot-badge').textContent='LIVE';$('bot-badge').style.background='#223d14';$('bot-badge').style.color='var(--lime)';}
-   else{$('bot-badge').textContent='IDLE';$('bot-badge').style.background='#30263e';$('bot-badge').style.color='var(--muted)';}
+   else{$('bot-badge').textContent='PAUSED';$('bot-badge').style.background='#30263e';$('bot-badge').style.color='var(--muted)';}
   }
   if($('bot-status-desc')){
    if(s.status==='uploading'&&s.current_clip){$('bot-status-desc').textContent='🚀 Uploading: '+s.current_clip.slice(0,18)+'...';$('bot-status-desc').style.color='var(--pink)';}
-   else if(s.status==='sleeping'){$('bot-status-desc').textContent='Cadence: every '+(s.interval_minutes||12)+' mins';$('bot-status-desc').style.color='var(--muted)';}
+   else if(s.running&&s.status==='sleeping'){$('bot-status-desc').textContent='Cadence: every '+(s.interval_minutes||12)+' mins';$('bot-status-desc').style.color='var(--muted)';}
+   else if(!s.running){$('bot-status-desc').textContent='Bot paused ('+(s.pending_count||0)+' ready)';$('bot-status-desc').style.color='var(--muted)';}
    else{$('bot-status-desc').textContent='Queue waiting ('+(s.pending_count||0)+' ready)';}
   }
  }catch(e){}
 }
-setInterval(()=>{if(botTimerSecs>0){botTimerSecs--;if($('bot-timer-display'))$('bot-timer-display').textContent=formatBotTime(botTimerSecs);}},1000);
+setInterval(()=>{if(botIsRunning&&botTimerSecs>0){botTimerSecs--;if($('bot-timer-display'))$('bot-timer-display').textContent=formatBotTime(botTimerSecs);}},1000);
 setInterval(updateBotWidget,5000);
-setTimeout(updateBotWidget,500);
-if($('bot-trigger-btn')){$('bot-trigger-btn').onclick=async()=>{const btn=$('bot-trigger-btn');btn.disabled=true;btn.textContent='⏳';try{await request('/bot/trigger');status('Upload cycle triggered for next pending clip.');setTimeout(updateBotWidget,800);}catch(e){status(e.message);}finally{setTimeout(()=>{btn.disabled=false;btn.textContent='⚡ Push';},3000);}};}
+setTimeout(updateBotWidget,300);
+
+if($('bot-toggle-btn')){$('bot-toggle-btn').onclick=async()=>{
+ const btn=$('bot-toggle-btn');
+ btn.disabled=true;
+ try{
+  if(botIsRunning){
+   await request('/bot/stop',{});
+   status('Upload bot paused.');
+  }else{
+   await request('/bot/start',{});
+   status('Upload bot started (12-minute cadence).');
+  }
+  await updateBotWidget();
+ }catch(e){status(e.message);}
+ finally{setTimeout(()=>{btn.disabled=false;},800);}
+};}
+
+if($('bot-trigger-btn')){$('bot-trigger-btn').onclick=async()=>{
+ const btn=$('bot-trigger-btn');
+ btn.disabled=true;
+ btn.textContent='⏳';
+ try{
+  await request('/bot/trigger',{});
+  status('Upload cycle triggered for next pending clip.');
+  setTimeout(updateBotWidget,800);
+ }catch(e){status(e.message);}
+ finally{setTimeout(()=>{btn.disabled=false;btn.textContent='⚡ Push';},3000);}
+};}
 
 $('make').onclick=async()=>{const url=$('url').value.trim();if(!url&&!id){status('Paste a video link or upload a file first.');return;}
  const b=$('make');b.disabled=true;$('make-results').hidden=false;$('make-results').querySelector('.star-ask')?.remove();$('make-grid').replaceChildren();$('make-progress').style.width='2%';
