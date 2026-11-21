@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+ENV/
+
+# Data, media outputs & sessions
+data/
+output/
+*.mp4
+*.wav
+*.part
+*.ytdl
+*.db
+*.sqlite3
+*.lock
+*.log
+
+# Environment & secrets
+.env
+.env.*
+*.secret
+
+# Operating system
+.DS_Store
+Thumbs.db
