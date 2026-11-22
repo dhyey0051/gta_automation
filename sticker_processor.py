@@ -44,38 +44,47 @@ def clean_and_trim_sticker(image_bytes: bytes, output_dir: Path) -> Dict[str, An
 
         # Margin to step inside outer window frame or edge artifacts (3-5px)
         m = max(2, min(6, w // 15, h // 15))
-        top_bar = bgr[m:m+8, m:w-m].reshape(-1, 3)
-        bot_bar = bgr[h-m-8:h-m, m:w-m].reshape(-1, 3)
-        left_bar = bgr[m:h-m, m:m+8].reshape(-1, 3)
-        right_bar = bgr[m:h-m, w-m-8:w-m].reshape(-1, 3)
+        top_bar = bgr[m:m+4, m:w-m].reshape(-1, 3)
+        bot_bar = bgr[h-m-4:h-m, m:w-m].reshape(-1, 3)
+        left_bar = bgr[m:h-m, m:m+4].reshape(-1, 3)
+        right_bar = bgr[m:h-m, w-m-4:w-m].reshape(-1, 3)
 
         border_samples = np.concatenate([top_bar, bot_bar, left_bar, right_bar], axis=0)
         bg_color = np.median(border_samples, axis=0)
 
-        # Flood fill from border seeds
+        # Flood fill from outer perimeter seeds using FIXED_RANGE
+        # FIXED_RANGE guarantees floodFill only matches pixels close to bg_color (the white/light-grey surrounding).
+        # It will NEVER enter black borders, red, blue, or any inner graphic!
         flood_mask = np.zeros((h + 2, w + 2), np.uint8)
-        tol = 24
+        tol = 20  # Strict color tolerance for white/light-grey background
+        flags = cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (4 << 8)
         copy_for_flood = bgr.copy()
 
-        seeds = [
-            (m, m), (w - 1 - m, m), (m, h - 1 - m), (w - 1 - m, h - 1 - m),
-            (w // 2, m), (w // 2, h - 1 - m), (m, h // 2), (w - 1 - m, h // 2)
-        ]
+        # Seed all along perimeter edges
+        step_x = max(1, w // 40)
+        step_y = max(1, h // 40)
+        seeds = []
+        for x in range(m, w - m, step_x):
+            seeds.append((x, m))
+            seeds.append((x, h - 1 - m))
+        for y in range(m, h - m, step_y):
+            seeds.append((m, y))
+            seeds.append((w - 1 - m, y))
+
         for cx, cy in seeds:
             cdiff = np.linalg.norm(bgr[cy, cx].astype(float) - bg_color)
-            if cdiff < 45:
+            if cdiff <= tol + 10:
                 cv2.floodFill(copy_for_flood, flood_mask, (cx, cy), (0, 0, 0),
-                              (tol, tol, tol), (tol, tol, tol),
-                              cv2.FLOODFILL_MASK_ONLY | (4 << 8))
+                              (tol, tol, tol), (tol, tol, tol), flags)
 
-        bg_mask = (flood_mask[1:-1, 1:-1] != 0)
+        outer_bg = (flood_mask[1:-1, 1:-1] != 0)
         # Mark outer edge margin
-        bg_mask[:m, :] = True
-        bg_mask[-m:, :] = True
-        bg_mask[:, :m] = True
-        bg_mask[:, -m:] = True
+        outer_bg[:m, :] = True
+        outer_bg[-m:, :] = True
+        outer_bg[:, :m] = True
+        outer_bg[:, -m:] = True
 
-        fg_mask = ~bg_mask
+        fg_mask = ~outer_bg
         coords = cv2.findNonZero(fg_mask.astype(np.uint8))
         if coords is not None:
             x, y, bw, bh = cv2.boundingRect(coords)
@@ -83,14 +92,7 @@ def clean_and_trim_sticker(image_bytes: bytes, output_dir: Path) -> Dict[str, An
             x, y, bw, bh = 0, 0, w, h
 
         bgra = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
-        bgra[bg_mask, 3] = 0
-
-        # Anti-alias transition edge
-        alpha_ch = bgra[:, :, 3]
-        edge_blur = cv2.GaussianBlur(alpha_ch, (3, 3), 0)
-        trans_zone = (alpha_ch > 0) & (alpha_ch < 255)
-        alpha_ch[trans_zone] = edge_blur[trans_zone]
-        bgra[:, :, 3] = alpha_ch
+        bgra[outer_bg, 3] = 0
 
         cropped = bgra[y:y+bh, x:x+bw]
 
