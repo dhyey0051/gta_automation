@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from loguru import logger
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
@@ -158,19 +158,29 @@ def upload_to_youtube(
     schedule_time: str = "",
     headless: bool = True,
     retry_count: int = 2,
+    progress_cb: Optional[Callable[[int, str, str, str], None]] = None,
 ) -> YouTubePublishResult:
     """
     Uploads a video to YouTube Studio synchronously using the proven persistent Playwright profile.
     Adapted from YouTube-Shorts-Automation-main.
     """
+    def report(pct: int, msg: str, st: str = "uploading", u: str = "") -> None:
+        if progress_cb:
+            try:
+                progress_cb(pct, msg, st, u)
+            except Exception:
+                pass
+
     path = Path(video_path)
     if not path.is_file():
         logger.error(f"[YT] Video file not found: {path}")
+        report(0, f"File not found: {path.name}", "failed")
         return YouTubePublishResult(ok=False, error=f"File not found: {path}", status="file_missing")
 
     active_profile = _get_active_profile(profile_dir)
     if not active_profile.is_dir():
         logger.error(f"[YT] Profile directory not found: {active_profile}")
+        report(0, "YouTube profile not found. Run AUTH_YOUTUBE.bat.", "failed")
         return YouTubePublishResult(
             ok=False,
             error=f"Profile directory not found: {active_profile}. Run AUTH_YOUTUBE.bat to login.",
@@ -194,6 +204,7 @@ def upload_to_youtube(
 
     for attempt in range(1, retry_count + 2):
         logger.info(f"[YT] Upload attempt {attempt}/{retry_count+1} for {path.name}")
+        report(10, f"Attempt {attempt}/{retry_count+1}: Launching Chrome...")
         clean_profile_locks(active_profile)
         browser = None
         with sync_playwright() as p:
@@ -216,12 +227,14 @@ def upload_to_youtube(
                 page.set_default_timeout(35000)
 
                 logger.info("[YT] Navigating to YouTube Studio...")
+                report(20, "Navigating to YouTube Studio...")
                 page.goto(STUDIO_URL, wait_until="networkidle", timeout=35000)
                 time.sleep(3)
                 _dismiss_interstitials(page)
 
                 if _detect_login_redirect(page.url) or "accounts.google.com" in page.url or "signin" in page.url:
                     logger.error("[YT] Session expired or not signed in! Manual re-auth required via AUTH_YOUTUBE.bat.")
+                    report(0, "YouTube session expired. Click 'Switch YouTube Channel' to log in.", "failed")
                     browser.close()
                     return YouTubePublishResult(
                         ok=False,
@@ -232,6 +245,7 @@ def upload_to_youtube(
 
                 # 1. Click Create -> Upload Videos
                 logger.info("[YT] Opening upload modal...")
+                report(35, "Opening upload modal...")
                 modal_opened = False
                 try:
                     create_btn = page.locator("#create-icon, ytcp-button#create-icon, [aria-label='Create']").first
@@ -258,6 +272,7 @@ def upload_to_youtube(
 
                 # 2. Select file
                 logger.info(f"[YT] Selecting video file: {path.name}")
+                report(45, f"Attaching video file: {path.name}...")
                 file_set = False
                 # Try direct file input first (fast & reliable)
                 file_input = page.locator("input[type='file']").first
@@ -278,12 +293,14 @@ def upload_to_youtube(
 
                 # Wait for upload modal to transition to details phase
                 logger.info("[YT] Waiting for details modal...")
+                report(55, "Uploading video payload to Studio...")
                 page.wait_for_selector("ytcp-video-description, #title-textarea", state="visible", timeout=60000)
                 time.sleep(2)
                 disable_scrims(page)
 
                 # 3. Details Step
                 logger.info(f"[YT] Setting title: {formatted_title}")
+                report(65, f"Setting title: {formatted_title[:32]}...")
                 disable_scrims(page)
                 title_box = page.locator("#title-textarea #textbox").first
                 title_box.wait_for(state="visible", timeout=10000)
@@ -315,6 +332,7 @@ def upload_to_youtube(
                 time.sleep(1)
 
                 logger.info("[YT] Setting description...")
+                report(72, "Setting description & hashtags...")
                 disable_scrims(page)
                 desc_box = page.locator("#description-textarea #textbox").first
                 if desc_box.count() > 0:
@@ -340,6 +358,7 @@ def upload_to_youtube(
                     time.sleep(1)
 
                 # Audience: Not made for kids
+                report(78, "Setting audience (Not made for kids)...")
                 disable_scrims(page)
                 kids_radio = page.locator("tp-yt-paper-radio-button[name='VIDEO_MADE_FOR_KIDS_NOT_MFK']").first
                 if kids_radio.count() > 0:
@@ -366,12 +385,13 @@ def upload_to_youtube(
                 # Check for daily upload limit right after details modal appears
                 if _is_daily_limit_reached(page):
                     logger.error("[YT] YouTube Daily Upload Limit reached on this channel!")
+                    report(100, "⚠️ Daily upload limit reached on this channel (Wait 24h or switch channel).", "daily_limit")
                     _save_debug_screenshot(page, "yt_daily_limit")
                     browser.close()
                     return YouTubePublishResult(
                         ok=False,
                         status="daily_limit",
-                        error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                        error="Daily upload limit reached on YouTube channel. Complete 1-time phone/ID verification in YouTube Studio, switch channel, or wait 24h.",
                     )
 
                 # Next steps until Visibility (3 steps)
@@ -380,15 +400,17 @@ def upload_to_youtube(
                 for step_num in range(1, 4):
                     disable_scrims(page)
                     time.sleep(1)
+                    report(78 + step_num * 3, f"Advancing checks & step {step_num}/3...")
 
                     if _is_daily_limit_reached(page):
                         logger.error(f"[YT] YouTube Daily Upload Limit reached at step {step_num}!")
+                        report(100, "⚠️ Daily upload limit reached on channel", "daily_limit")
                         _save_debug_screenshot(page, "yt_daily_limit")
                         browser.close()
                         return YouTubePublishResult(
                             ok=False,
                             status="daily_limit",
-                            error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                            error="Daily upload limit reached on YouTube channel. Complete 1-time verification in YouTube Studio, switch channel, or wait 24h.",
                         )
 
                     # Next button inside ytcp-uploads-dialog with 'Next' text
@@ -407,12 +429,13 @@ def upload_to_youtube(
                                 logger.warning(f"[YT] Next button is disabled at step {step_num}")
                                 if _is_daily_limit_reached(page):
                                     logger.error("[YT] Daily upload limit banner is blocking Next button!")
+                                    report(100, "⚠️ Daily upload limit reached on channel", "daily_limit")
                                     _save_debug_screenshot(page, "yt_daily_limit")
                                     browser.close()
                                     return YouTubePublishResult(
                                         ok=False,
                                         status="daily_limit",
-                                        error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                                        error="Daily upload limit reached on YouTube channel. Complete 1-time verification in YouTube Studio, switch channel, or wait 24h.",
                                     )
                                 advanced_all_steps = False
                                 break
@@ -426,12 +449,13 @@ def upload_to_youtube(
                         logger.warning(f"[YT] Next button not visible at step {step_num}")
                         if _is_daily_limit_reached(page):
                             logger.error("[YT] Daily upload limit banner detected!")
+                            report(100, "⚠️ Daily upload limit reached on channel", "daily_limit")
                             _save_debug_screenshot(page, "yt_daily_limit")
                             browser.close()
                             return YouTubePublishResult(
                                 ok=False,
                                 status="daily_limit",
-                                error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                                error="Daily upload limit reached on YouTube channel. Complete 1-time verification in YouTube Studio, switch channel, or wait 24h.",
                             )
                         advanced_all_steps = False
                         break
@@ -439,6 +463,7 @@ def upload_to_youtube(
 
                 if not advanced_all_steps:
                     _save_debug_screenshot(page, "yt_wizard_step_failed")
+                    report(0, "Could not advance to Visibility step.", "failed")
                     browser.close()
                     return YouTubePublishResult(
                         ok=False,
@@ -450,6 +475,7 @@ def upload_to_youtube(
                 disable_scrims(page)
                 if schedule_date and schedule_time:
                     logger.info(f"[YT] Scheduling for {schedule_date} at {schedule_time}...")
+                    report(90, f"Scheduling for {schedule_date} at {schedule_time}...")
                     schedule_radio = page.locator("tp-yt-paper-radio-button[name='SCHEDULE']").first
                     schedule_radio.wait_for(state="visible", timeout=15000)
                     try:
@@ -482,6 +508,7 @@ def upload_to_youtube(
                         page.evaluate("() => { const b = document.querySelector('ytcp-uploads-dialog #done-button, #done-button'); if(b) b.click(); }")
                 else:
                     logger.info("[YT] Setting visibility to Public...")
+                    report(90, "Setting visibility to Public & publishing...")
                     public_radio = page.locator("tp-yt-paper-radio-button[name='PUBLIC']").first
                     if public_radio.count() == 0 or not public_radio.is_visible():
                         public_radio = page.get_by_role("radio", name="Public").first
@@ -510,12 +537,14 @@ def upload_to_youtube(
 
                 # 5. Wait for REAL upload confirmation (share dialog or video published indicator)
                 logger.info("[YT] Waiting for upload success confirmation (up to 360s)...")
+                report(94, "Waiting for upload success confirmation...")
                 start_wait = time.monotonic()
                 confirmed = False
                 remote_url = None
                 remote_id = None
 
                 while time.monotonic() - start_wait < 360:
+                    report(94 + int(min(5, (time.monotonic() - start_wait) / 60)), f"Waiting for YouTube confirmation ({int(time.monotonic() - start_wait)}s)...")
                     # Check for share dialog
                     share_dialog = page.locator("ytcp-video-share-dialog").first
                     if share_dialog.count() > 0 and share_dialog.is_visible():
@@ -553,6 +582,7 @@ def upload_to_youtube(
 
                 if not confirmed:
                     err_img = _save_debug_screenshot(page, "yt_upload_timeout")
+                    report(0, "Timeout waiting for publish confirmation", "failed")
                     raise PlaywrightTimeoutError(f"Timeout waiting for YouTube upload confirmation (360s exceeded). Debug saved to {err_img.name}")
 
                 # Extract video URL if not already captured
@@ -570,6 +600,7 @@ def upload_to_youtube(
                         remote_id = m.group(1)
 
                 logger.success(f"[YT] Successfully uploaded to YouTube Shorts: {remote_url or path.name}")
+                report(100, f"✅ Published Short! ({remote_url or 'Live'})", "success", remote_url or "")
                 browser.close()
                 return YouTubePublishResult(
                     ok=True,
@@ -580,6 +611,7 @@ def upload_to_youtube(
 
             except PlaywrightTimeoutError as e:
                 logger.error(f"[YT] Timeout on attempt {attempt}: {e}")
+                report(0, f"Timeout: {e}", "failed")
                 if browser:
                     try:
                         browser.close()
@@ -592,6 +624,7 @@ def upload_to_youtube(
 
             except Exception as e:
                 logger.error(f"[YT] Error on attempt {attempt}: {e}")
+                report(0, f"Error: {e}", "failed")
                 if browser:
                     try:
                         browser.close()
@@ -602,6 +635,7 @@ def upload_to_youtube(
                     continue
                 return YouTubePublishResult(ok=False, error=str(e), status="error")
 
+    report(0, f"Failed after {retry_count} retries", "failed")
     return YouTubePublishResult(ok=False, error=f"Failed after {retry_count} retries", status="failed")
 
 

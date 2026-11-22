@@ -375,11 +375,77 @@ async function updateBotWidget(){
    else if(!s.running){$('bot-status-desc').textContent='Bot paused ('+(s.pending_count||0)+' ready)';$('bot-status-desc').style.color='var(--muted)';}
    else{$('bot-status-desc').textContent='Queue waiting ('+(s.pending_count||0)+' ready)';}
   }
+  if(s.upload_progress){
+   const p=s.upload_progress;
+   if(p.youtube){
+    const yPct=p.youtube.percent||0;
+    const yBar=$('yt-prog-bar');
+    const yPctEl=$('yt-prog-pct');
+    const yStatus=$('yt-prog-status');
+    if(yBar){
+     yBar.style.width=Math.max(yPct>0?3:0, yPct)+'%';
+     yBar.className='bot-prog-fill yt-fill';
+     if(p.youtube.status==='success')yBar.classList.add('is-success');
+     else if(p.youtube.status==='daily_limit')yBar.classList.add('is-warning');
+     else if(p.youtube.status==='failed')yBar.classList.add('is-failed');
+    }
+    if(yPctEl){
+     yPctEl.textContent=yPct+'%';
+     if(p.youtube.status==='success')yPctEl.style.color='#34d399';
+     else if(p.youtube.status==='daily_limit')yPctEl.style.color='#f59e0b';
+     else if(p.youtube.status==='failed')yPctEl.style.color='#ff6666';
+     else yPctEl.style.color='var(--muted)';
+    }
+    if(yStatus){
+     if(p.youtube.url){
+      yStatus.innerHTML=`<a href="${p.youtube.url}" target="_blank" style="color:var(--cyan);text-decoration:underline">${p.youtube.stage||'View Short ↗'}</a>`;
+     }else{
+      yStatus.textContent=p.youtube.stage||(yPct>0?yPct+'% complete':'Idle · Waiting');
+     }
+    }
+   }
+   if(p.instagram){
+    const iPct=p.instagram.percent||0;
+    const iBar=$('ig-prog-fill');
+    const iPctEl=$('ig-prog-pct');
+    const iStatus=$('ig-prog-status');
+    if(iBar){
+     iBar.style.width=Math.max(iPct>0?3:0, iPct)+'%';
+     iBar.className='bot-prog-fill ig-fill';
+     if(p.instagram.status==='success')iBar.classList.add('is-success');
+     else if(p.instagram.status==='failed')iBar.classList.add('is-failed');
+    }
+    if(iPctEl){
+     iPctEl.textContent=iPct+'%';
+     if(p.instagram.status==='success')iPctEl.style.color='#34d399';
+     else if(p.instagram.status==='failed')iPctEl.style.color='#ff6666';
+     else iPctEl.style.color='var(--muted)';
+    }
+    if(iStatus){
+     if(p.instagram.url){
+      iStatus.innerHTML=`<a href="${p.instagram.url}" target="_blank" style="color:var(--cyan);text-decoration:underline">${p.instagram.stage||'View Reel ↗'}</a>`;
+     }else{
+      iStatus.textContent=p.instagram.stage||(iPct>0?iPct+'% complete':'Idle · Waiting');
+     }
+    }
+   }
+  }
  }catch(e){}
 }
 setInterval(()=>{if(botIsRunning&&botTimerSecs>0){botTimerSecs--;if($('bot-timer-display'))$('bot-timer-display').textContent=formatBotTime(botTimerSecs);}},1000);
 setInterval(updateBotWidget,5000);
 setTimeout(updateBotWidget,300);
+
+if($('yt-switch-channel-btn')){$('yt-switch-channel-btn').onclick=async()=>{
+ const btn=$('yt-switch-channel-btn');
+ btn.disabled=true;
+ btn.textContent='⏳ Opening Chrome...';
+ try{
+  await request('/uploader/open-auth',{platform:'youtube'});
+  status('Chrome opened. Pick your new channel or log in to a new account, then return.');
+ }catch(e){status('Error opening browser: '+e.message);}
+ finally{setTimeout(()=>{btn.disabled=false;btn.textContent='🔑 Switch YouTube Channel';},4000);}
+};}
 
 if($('bot-toggle-btn')){$('bot-toggle-btn').onclick=async()=>{
  const btn=$('bot-toggle-btn');

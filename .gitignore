@@ -30,6 +30,7 @@ __pycache__/
 !install.ps1
 !install.sh
 !NeonClipping-Setup.bat
+!*.bat
 !docs/.nojekyll
 !docs/*.mp4
 

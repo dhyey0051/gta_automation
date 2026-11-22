@@ -151,3 +151,98 @@ details.panel>summary{cursor:pointer;list-style:none;font-size:16px}details.pane
 .delete-reel-btn:hover{background:#ff2d55;border-color:#ff2d55;color:#fff;box-shadow:0 0 10px rgba(255,45,85,.4)}
 .chunk-source-pill{background:#181124;border:1px solid #3d2b4f;color:var(--cyan);font-size:10px;font-weight:700;padding:3px 8px;border-radius:5px;display:inline-flex;align-items:center;gap:4px;width:fit-content}
 
+
+/* Upload Bot Live Progress Bars */
+.bot-progress-box {
+  margin: 10px 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #110b1a;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #362247;
+}
+
+.bot-progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bot-prog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.bot-prog-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #dfd4ec;
+}
+
+.bot-prog-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.bot-prog-pct {
+  font-size: 9.5px;
+  font-weight: 800;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bot-prog-track {
+  height: 6px;
+  background: #1a1226;
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid #3d2750;
+}
+
+.bot-prog-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.35s ease, background 0.35s ease;
+}
+
+.bot-prog-fill.yt-fill {
+  background: linear-gradient(90deg, #ff2222, #ff5555, #ff8888);
+  box-shadow: 0 0 8px rgba(255, 34, 34, 0.4);
+}
+
+.bot-prog-fill.ig-fill {
+  background: linear-gradient(90deg, #833ab4, #fd1d1d, #fcb045);
+  box-shadow: 0 0 8px rgba(253, 29, 29, 0.4);
+}
+
+.bot-prog-fill.is-success {
+  background: linear-gradient(90deg, #059669, #10b981, #34d399) !important;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5) !important;
+}
+
+.bot-prog-fill.is-warning {
+  background: linear-gradient(90deg, #d97706, #f59e0b) !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5) !important;
+}
+
+.bot-prog-fill.is-failed {
+  background: linear-gradient(90deg, #b91c1c, #ef4444) !important;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5) !important;
+}
+
+.bot-prog-status {
+  font-size: 8.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}

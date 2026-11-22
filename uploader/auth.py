@@ -28,18 +28,21 @@ BROWSER_ARGS = [
 ]
 
 
-def launch_youtube_auth(profile_path: Path = youtube_uploader.DEFAULT_PROFILE_DIR) -> None:
-    """Launch headed browser for YouTube Studio login."""
+def launch_youtube_auth(profile_path: Path = youtube_uploader.DEFAULT_PROFILE_DIR, switch_channel: bool = False) -> None:
+    """Launch headed browser for YouTube Studio login or channel switching."""
     profile_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Launching YouTube Studio auth session in: {profile_path}")
     print("\n" + "=" * 60)
-    print("  YOUTUBE STUDIO AUTHENTICATION HELPER")
+    print("  YOUTUBE STUDIO / CHANNEL AUTHENTICATION HELPER")
     print("=" * 60)
     print("1. A Chrome browser window will now open.")
-    print("2. Sign in to your YouTube channel (e.g. adg-cliping).")
-    print("3. Once YouTube Studio is loaded and ready, come back here.")
-    print("4. Press ENTER in this window to save and exit.")
+    print("2. Sign in to your new Google account, OR")
+    print("3. Click your channel/avatar -> 'Switch account' to pick your new channel.")
+    print("4. Once your new channel is open in YouTube Studio, come back here.")
+    print("5. Press ENTER in this window to save and exit.")
     print("=" * 60 + "\n")
+
+    target_url = "https://www.youtube.com/channel_switcher" if switch_channel else YOUTUBE_STUDIO_URL
 
     with sync_playwright() as p:
         browser = p.chromium.launch_persistent_context(
@@ -51,7 +54,7 @@ def launch_youtube_auth(profile_path: Path = youtube_uploader.DEFAULT_PROFILE_DI
         page = browser.new_page()
         page.set_default_timeout(120000)
         try:
-            page.goto(YOUTUBE_STUDIO_URL, wait_until="domcontentloaded")
+            page.goto(target_url, wait_until="domcontentloaded")
         except Exception:
             pass
 
@@ -63,8 +66,8 @@ def launch_youtube_auth(profile_path: Path = youtube_uploader.DEFAULT_PROFILE_DI
         print("\nVerifying YouTube Studio session...")
         time.sleep(2)
         try:
-            if "studio.youtube.com" in page.url:
-                print("SUCCESS: Logged in to YouTube Studio successfully!")
+            if "studio.youtube.com" in page.url or "youtube.com" in page.url:
+                print("SUCCESS: Logged in / selected channel successfully!")
             else:
                 print(f"Current page URL: {page.url}")
         except Exception:
@@ -136,12 +139,13 @@ def check_all() -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Uploader authentication helper")
     parser.add_argument("--youtube", action="store_true", help="Launch interactive YouTube login")
+    parser.add_argument("--switch", action="store_true", help="Launch YouTube channel switcher directly")
     parser.add_argument("--instagram", action="store_true", help="Launch interactive Instagram login")
     parser.add_argument("--check", action="store_true", help="Check headless auth status for all platforms")
     args = parser.parse_args()
 
-    if args.youtube:
-        launch_youtube_auth()
+    if args.youtube or args.switch:
+        launch_youtube_auth(switch_channel=args.switch)
     elif args.instagram:
         launch_instagram_auth()
     elif args.check:

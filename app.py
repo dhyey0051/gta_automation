@@ -868,6 +868,23 @@ def bot_trigger_endpoint():
     t.start()
     return {'ok': True, 'message': 'Upload cycle triggered.'}
 
+@app.post('/uploader/open-auth')
+def open_auth_endpoint(payload: dict = None):
+    """Launch headed Chrome window for interactive YouTube / Instagram login or channel switching."""
+    import subprocess
+    payload = payload or {}
+    platform = payload.get('platform', 'youtube')
+    cmd = [sys.executable, "-m", "uploader.auth"]
+    if platform == 'youtube':
+        cmd.append('--switch')
+    elif platform == 'instagram':
+        cmd.append('--instagram')
+    try:
+        subprocess.Popen(cmd, cwd=str(BASE_DIR))
+        return {'ok': True, 'message': f'Launched visible browser for {platform} account login / channel switch.'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
 @app.on_event("startup")
 def startup_event():
     if os.environ.get("NEONCLIPPING_START_BOT", "1") != "0":

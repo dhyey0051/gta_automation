@@ -31,6 +31,25 @@ DEFAULT_INTERVAL_SECONDS = 12 * 60  # 12 minutes (720 seconds)
 _BOT_RUNNING = False
 _BOT_THREAD: Optional[threading.Thread] = None
 _STOP_EVENT = threading.Event()
+
+_UPLOAD_PROGRESS: Dict[str, Any] = {
+    "active": False,
+    "clip": None,
+    "current_platform": None,
+    "youtube": {
+        "status": "idle",
+        "percent": 0,
+        "stage": "Waiting for next upload cycle",
+        "url": "",
+    },
+    "instagram": {
+        "status": "idle",
+        "percent": 0,
+        "stage": "Waiting for next upload cycle",
+        "url": "",
+    },
+}
+
 _LAST_RUN_INFO: Dict[str, Any] = {
     "status": "idle",
     "last_check": None,
@@ -42,7 +61,35 @@ _LAST_RUN_INFO: Dict[str, Any] = {
     "next_upload_at": 0,
     "last_heartbeat": 0,
     "youtube_daily_limit": False,
+    "upload_progress": _UPLOAD_PROGRESS,
 }
+
+
+def set_upload_progress(
+    platform: Optional[str],
+    percent: int,
+    stage: str,
+    status: str = "uploading",
+    url: str = "",
+    clip: Optional[str] = None,
+) -> None:
+    """Thread-safe upload progress updater exposed via /bot/status for real-time Web UI progress bars."""
+    global _UPLOAD_PROGRESS
+    if clip:
+        _UPLOAD_PROGRESS["clip"] = clip
+    if platform in ("youtube", "instagram"):
+        _UPLOAD_PROGRESS["current_platform"] = platform
+        _UPLOAD_PROGRESS[platform]["percent"] = max(0, min(100, percent))
+        _UPLOAD_PROGRESS[platform]["stage"] = stage
+        _UPLOAD_PROGRESS[platform]["status"] = status
+        if url:
+            _UPLOAD_PROGRESS[platform]["url"] = url
+    _UPLOAD_PROGRESS["active"] = (
+        _UPLOAD_PROGRESS["youtube"]["status"] == "uploading"
+        or _UPLOAD_PROGRESS["instagram"]["status"] == "uploading"
+    )
+    _LAST_RUN_INFO["upload_progress"] = _UPLOAD_PROGRESS
+    _save_bot_state()
 
 
 def _save_bot_state() -> None:
@@ -97,8 +144,26 @@ def process_next_clip(
     _LAST_RUN_INFO["seconds_remaining"] = 0
     _save_bot_state()
 
+    # Initialize progress for both platforms
+    set_upload_progress(
+        "youtube",
+        5 if "youtube" in needed else 100,
+        "Queued for YouTube Shorts..." if "youtube" in needed else "Already uploaded to YouTube",
+        status="uploading" if "youtube" in needed else "skipped",
+        clip=clip_path.name,
+    )
+    set_upload_progress(
+        "instagram",
+        0 if "instagram" in needed else 100,
+        "Waiting for YouTube stage..." if "instagram" in needed else "Already uploaded to Instagram",
+        status="idle" if "instagram" in needed else "skipped",
+        clip=clip_path.name,
+    )
+
     if not browser_utils.acquire_global_upload_lock(timeout=60):
         logger.warning("[Bot] Another upload is currently in progress; skipping this cycle.")
+        set_upload_progress("youtube", 0, "Upload postponed: Browser lock busy", status="idle")
+        set_upload_progress("instagram", 0, "Upload postponed: Browser lock busy", status="idle")
         return None
 
     try:
@@ -107,15 +172,20 @@ def process_next_clip(
         # 1. YouTube Upload
         if "youtube" in needed and "youtube" in platforms:
             logger.info(f"[Bot] Starting YouTube Shorts upload for {clip_path.name}...")
+            def yt_cb(pct: int, msg: str, st: str = "uploading", u: str = ""):
+                set_upload_progress("youtube", pct, msg, status=st, url=u, clip=clip_path.name)
+
             try:
                 yt_res = youtube_uploader.upload_to_youtube(
                     clip_path,
                     title=title,
                     description=yt_description,
                     headless=headless,
+                    progress_cb=yt_cb,
                 )
                 if yt_res.ok:
                     _LAST_RUN_INFO["youtube_daily_limit"] = False
+                    set_upload_progress("youtube", 100, f"✅ Published Short! ({yt_res.remote_url or 'Live'})", status="success", url=yt_res.remote_url or "", clip=clip_path.name)
                     ledger.record_upload(
                         clip_path,
                         platform="youtube",
@@ -127,6 +197,10 @@ def process_next_clip(
                     logger.success(f"[Bot] YouTube Shorts upload SUCCESS for {clip_path.name}!")
                 else:
                     record_status = "daily_limit" if yt_res.status == "daily_limit" else "failed"
+                    if yt_res.status == "daily_limit":
+                        set_upload_progress("youtube", 100, "⚠️ Daily upload limit reached (Wait 24h or switch channel).", status="daily_limit", clip=clip_path.name)
+                    else:
+                        set_upload_progress("youtube", 0, f"❌ Failed: {yt_res.error or 'Upload error'}", status="failed", clip=clip_path.name)
                     ledger.record_upload(
                         clip_path,
                         platform="youtube",
@@ -147,19 +221,25 @@ def process_next_clip(
                 }
             except Exception as e:
                 logger.error(f"[Bot] Unexpected YouTube exception: {e}")
+                set_upload_progress("youtube", 0, f"❌ Exception: {e}", status="failed", clip=clip_path.name)
                 ledger.record_upload(clip_path, platform="youtube", status="failed", title=title, error=str(e))
                 results["youtube"] = {"ok": False, "error": str(e)}
 
         # 2. Instagram Upload
         if "instagram" in needed and "instagram" in platforms:
             logger.info(f"[Bot] Starting Instagram Reels upload for {clip_path.name}...")
+            def ig_cb(pct: int, msg: str, st: str = "uploading", u: str = ""):
+                set_upload_progress("instagram", pct, msg, status=st, url=u, clip=clip_path.name)
+
             try:
                 ig_res = instagram_uploader.upload_to_instagram(
                     clip_path,
                     caption=ig_caption,
                     headless=headless,
+                    progress_cb=ig_cb,
                 )
                 if ig_res.ok:
+                    set_upload_progress("instagram", 100, f"✅ Published Reel! ({ig_res.remote_url or 'Live'})", status="success", url=ig_res.remote_url or "", clip=clip_path.name)
                     ledger.record_upload(
                         clip_path,
                         platform="instagram",
@@ -170,6 +250,7 @@ def process_next_clip(
                     )
                     logger.success(f"[Bot] Instagram Reels upload SUCCESS for {clip_path.name}!")
                 else:
+                    set_upload_progress("instagram", 0, f"❌ Failed: {ig_res.error or 'Upload error'}", status="failed", clip=clip_path.name)
                     ledger.record_upload(
                         clip_path,
                         platform="instagram",
@@ -186,10 +267,14 @@ def process_next_clip(
                 }
             except Exception as e:
                 logger.error(f"[Bot] Unexpected Instagram exception: {e}")
+                set_upload_progress("instagram", 0, f"❌ Exception: {e}", status="failed", clip=clip_path.name)
                 ledger.record_upload(clip_path, platform="instagram", status="failed", title=title, error=str(e))
                 results["instagram"] = {"ok": False, "error": str(e)}
     finally:
         browser_utils.release_global_upload_lock()
+        _UPLOAD_PROGRESS["active"] = False
+        _LAST_RUN_INFO["upload_progress"] = _UPLOAD_PROGRESS
+        _save_bot_state()
 
     _LAST_RUN_INFO["last_upload"] = {
         "clip": clip_path.name,
@@ -346,6 +431,7 @@ def get_bot_status() -> Dict[str, Any]:
         "last_check": info.get("last_check"),
         "last_upload": info.get("last_upload"),
         "recent_history": history[:5],
+        "upload_progress": info.get("upload_progress") or _UPLOAD_PROGRESS,
     }
 
 

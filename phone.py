@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 LOCAL = ('127.0.0.1', '::1', 'localhost', 'testclient')
 ALLOW = ('/m', '/manifest.webmanifest', '/phone-icon.svg', '/live', '/live-active', '/library', '/media', '/text', '/make', '/status',
-         '/clips', '/feedback', '/creators', '/donate', '/healthz', '/assets', '/preferences', '/probe-chunks', '/upload', '/bot')
+         '/clips', '/feedback', '/creators', '/donate', '/healthz', '/assets', '/preferences', '/probe-chunks', '/upload', '/bot', '/uploader')
 MAX_TRIES, LOCK_SECONDS = 5, 600
 COOKIE = 'nc_phone'
 

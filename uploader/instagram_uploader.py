@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from loguru import logger
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
@@ -102,19 +102,29 @@ def upload_to_instagram(
     profile_dir: Optional[Path | str] = None,
     headless: bool = True,
     retry_count: int = 1,
+    progress_cb: Optional[Callable[[int, str, str, str], None]] = None,
 ) -> InstagramPublishResult:
     """
     Upload a vertical 9:16 clip to Instagram Reels.
     Uses resilient direct file binding, menu traversal, and 9:16 aspect ratio selection.
     """
+    def report(pct: int, msg: str, st: str = "uploading", u: str = "") -> None:
+        if progress_cb:
+            try:
+                progress_cb(pct, msg, st, u)
+            except Exception:
+                pass
+
     path = Path(video_path)
     if not path.is_file():
         logger.error(f"[IG] Video file not found: {path}")
+        report(0, f"File not found: {path.name}", "failed")
         return InstagramPublishResult(ok=False, error=f"File not found: {path}", status="file_missing")
 
     active_profile = Path(profile_dir) if profile_dir else DEFAULT_PROFILE_DIR
     if not active_profile.is_dir():
         logger.error(f"[IG] Profile directory not found: {active_profile}")
+        report(0, "Instagram profile not found. Run AUTH_INSTAGRAM.bat.", "failed")
         return InstagramPublishResult(
             ok=False,
             error=f"Profile directory not found: {active_profile}. Run AUTH_INSTAGRAM.bat to sign in.",
@@ -132,6 +142,7 @@ def upload_to_instagram(
 
     for attempt in range(1, retry_count + 2):
         logger.info(f"[IG] Reel upload attempt {attempt}/{retry_count+1} for {path.name}")
+        report(10, f"Attempt {attempt}/{retry_count+1}: Launching Chrome...")
         clean_profile_locks(active_profile)
         browser = None
         with sync_playwright() as p:
@@ -155,6 +166,7 @@ def upload_to_instagram(
 
                 # 1. Navigate to Instagram (with retry for network hiccups)
                 logger.info("[IG] Navigating to Instagram...")
+                report(20, "Navigating to Instagram...")
                 for nav_try in range(3):
                     try:
                         page.goto(INSTAGRAM_URL, wait_until="domcontentloaded", timeout=25000)
@@ -167,6 +179,7 @@ def upload_to_instagram(
 
                 if "accounts/login" in page.url.lower():
                     logger.error("[IG] Login redirect detected. Session expired!")
+                    report(0, "Instagram session expired. Run AUTH_INSTAGRAM.bat to log in again.", "failed")
                     browser.close()
                     return InstagramPublishResult(
                         ok=False,
@@ -186,6 +199,7 @@ def upload_to_instagram(
 
                 # 2. Click Create button
                 logger.info("[IG] Locating Create button...")
+                report(35, "Opening Create Reel modal...")
                 create_btn = page.locator(
                     "svg[aria-label='New post'], svg[aria-label='Create']"
                 ).locator("xpath=ancestor::a | ancestor::div[@role='button']").first
@@ -195,6 +209,7 @@ def upload_to_instagram(
 
                 # 3. Click 'Post' from the dropdown popover menu
                 logger.info("[IG] Selecting 'Post' option from menu...")
+                report(42, "Selecting 'Post' option...")
                 post_item = page.locator("text='Post'").first
                 post_item.wait_for(state="visible", timeout=10000)
                 post_item.click()
@@ -202,10 +217,12 @@ def upload_to_instagram(
 
                 # 4. Attach video file directly to input[type='file']
                 logger.info(f"[IG] Uploading video file: {path.name}...")
+                report(50, f"Attaching video file: {path.name}...")
                 file_input = page.locator("input[type='file']").first
                 file_input.wait_for(state="attached", timeout=15000)
                 file_input.set_input_files(str(path.resolve()))
                 logger.info("[IG] File attached, waiting for preview...")
+                report(58, "Processing video preview...")
                 time.sleep(4)
 
                 # Handle "Video posts are now shared as reels" notice if shown
@@ -220,6 +237,7 @@ def upload_to_instagram(
 
                 # 5. Aspect Ratio: Switch to 9:16 vertical crop
                 logger.info("[IG] Setting 9:16 vertical aspect ratio...")
+                report(65, "Selecting 9:16 vertical crop...")
                 crop_btn = page.locator("svg[aria-label='Select crop'], button:has(svg[aria-label='Select crop'])").first
                 if crop_btn.count() > 0 and crop_btn.is_visible():
                     try:
@@ -235,6 +253,7 @@ def upload_to_instagram(
 
                 # 6. Click Next (Step 1: Crop -> Edit/Cover)
                 logger.info("[IG] Wizard step 1: Clicking Next (Crop -> Edit)...")
+                report(72, "Wizard Step 1: Crop -> Edit...")
                 next_btn1 = page.locator("div[role='dialog'] button:has-text('Next'), div[role='dialog'] div[role='button']:has-text('Next')").first
                 next_btn1.wait_for(state="visible", timeout=15000)
                 try:
@@ -245,6 +264,7 @@ def upload_to_instagram(
 
                 # 7. Click Next (Step 2: Edit/Cover -> Details/Caption)
                 logger.info("[IG] Wizard step 2: Clicking Next (Edit -> Details)...")
+                report(78, "Wizard Step 2: Edit -> Details...")
                 next_btn2 = page.locator("div[role='dialog'] button:has-text('Next'), div[role='dialog'] div[role='button']:has-text('Next')").first
                 next_btn2.wait_for(state="visible", timeout=15000)
                 try:
@@ -255,6 +275,7 @@ def upload_to_instagram(
 
                 # 8. Insert Caption
                 logger.info(f"[IG] Typing caption ({len(formatted_caption)} chars)...")
+                report(84, "Typing caption & viral hashtags...")
                 caption_box = page.locator(
                     "div[aria-label='Write a caption...'], div[role='textbox'][contenteditable='true']"
                 ).first
@@ -277,6 +298,7 @@ def upload_to_instagram(
 
                 # 9. Click Share
                 logger.info("[IG] Clicking Share button...")
+                report(88, "Clicking Share & uploading Reel...")
                 share_btn = page.locator(
                     "div[role='dialog'] button:has-text('Share'), div[role='dialog'] div[role='button']:has-text('Share')"
                 ).first
@@ -287,10 +309,12 @@ def upload_to_instagram(
                     page.evaluate("() => { const b = document.querySelector(\"div[role='dialog'] button:has-text('Share'), div[role='dialog'] div[role='button']:has-text('Share')\"); if(b) b.click(); }")
 
                 # 10. Wait for confirmation ("Your reel has been shared" or modal close)
-                logger.info("[IG] Waiting for upload completion confirmation (up to 360s)...")
+                logger.info("[IG] Waiting for upload completion confirmation (up to 480s)...")
+                report(90, "Waiting for upload completion confirmation...")
                 start_wait = time.monotonic()
                 share_confirmed = False
-                while time.monotonic() - start_wait < 360:
+                while time.monotonic() - start_wait < 480:
+                    report(90 + int(min(7, (time.monotonic() - start_wait) / 60)), f"Sharing & processing Reel on Instagram ({int(time.monotonic() - start_wait)}s)...")
                     # Check for confirmation indicators
                     success_msg = page.locator(
                         "span:has-text('Your reel has been shared'), "
@@ -315,7 +339,8 @@ def upload_to_instagram(
                     time.sleep(2)
 
                 if not share_confirmed:
-                    raise PlaywrightTimeoutError("Timeout waiting for Instagram upload completion (360s exceeded)")
+                    report(0, "Timeout waiting for Instagram upload completion", "failed")
+                    raise PlaywrightTimeoutError("Timeout waiting for Instagram upload completion (480s exceeded)")
 
                 # Try to extract URL or post link
                 remote_url = None
@@ -332,6 +357,7 @@ def upload_to_instagram(
                 except Exception as link_err:
                     logger.debug(f"[IG] Could not extract post URL: {link_err}")
 
+                report(100, f"✅ Published Reel! ({remote_url or 'Live'})", "success", remote_url or "")
                 browser.close()
                 return InstagramPublishResult(
                     ok=True,
@@ -342,6 +368,7 @@ def upload_to_instagram(
 
             except PlaywrightTimeoutError as e:
                 logger.error(f"[IG] Timeout on attempt {attempt}: {e}")
+                report(0, f"Timeout: {e}", "failed")
                 # Save screenshot for debugging
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 err_img = DEBUG_DIR / f"ig_error_timeout_{timestamp}.png"
@@ -359,6 +386,7 @@ def upload_to_instagram(
 
             except Exception as e:
                 logger.error(f"[IG] Unexpected error on attempt {attempt}: {e}")
+                report(0, f"Error: {e}", "failed")
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 err_img = DEBUG_DIR / f"ig_error_{timestamp}.png"
                 if browser:
@@ -373,6 +401,7 @@ def upload_to_instagram(
                     continue
                 return InstagramPublishResult(ok=False, error=str(e), status="error")
 
+    report(0, f"Failed after {retry_count} retries", "failed")
     return InstagramPublishResult(ok=False, error=f"Failed after {retry_count} retries", status="failed")
 
 
