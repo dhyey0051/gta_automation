@@ -275,7 +275,7 @@ def neonclipping_enable_auto_upload(enabled: bool = True) -> Dict[str, Any]:
         pass
     return {
         "auto_upload_enabled": enabled,
-        "platforms": ["YouTube Shorts (my-channel)", "Instagram Reels (ADG)"],
+        "platforms": ["YouTube Shorts (adg-cliping)", "Instagram Reels (ADG)"],
         "message": f"Automatic uploading is now {'ENABLED' if enabled else 'DISABLED'}. Every new clip made will be published directly."
     }
 

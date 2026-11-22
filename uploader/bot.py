@@ -22,7 +22,7 @@ from loguru import logger
 
 from uploader import browser_utils, instagram_uploader, ledger, youtube_uploader
 
-BASE_DIR = Path(".")
+BASE_DIR = Path("G:/dhyey/automation/neonclipping-main")
 DATA_DIR = BASE_DIR / "data"
 STATE_FILE = DATA_DIR / "bot_state.json"
 
@@ -41,6 +41,7 @@ _LAST_RUN_INFO: Dict[str, Any] = {
     "seconds_remaining": 0,
     "next_upload_at": 0,
     "last_heartbeat": 0,
+    "youtube_daily_limit": False,
 }
 
 
@@ -64,6 +65,11 @@ def process_next_clip(
     Guarantees no duplicate uploads.
     """
     pending = ledger.get_pending_clips(DATA_DIR, platforms=platforms)
+    # Filter to only clips that need BOTH platforms (YouTube + Instagram)
+    both_pending = [c for c in pending if all(p in c["needed_platforms"] for p in platforms)]
+    if both_pending:
+        pending = both_pending
+
     _LAST_RUN_INFO["pending_count"] = len(pending)
     _LAST_RUN_INFO["last_check"] = datetime.now(timezone.utc).isoformat()
 
@@ -82,7 +88,8 @@ def process_next_clip(
     yt_description = full_meta.get("youtube_description") or f"{title}\n\n#Shorts #Gaming #GTA6 #RockstarGames #ViralShorts"
     ig_caption = full_meta.get("instagram_caption") or f"{title}\n.\n.\n#reels #gaming #viral #gta6 #gtavi #explorepage"
 
-    logger.info(f"[Bot] Processing clip: {clip_path.name}")
+    stars = clip.get("stars", 3)
+    logger.info(f"[Bot] Processing clip: {clip_path.name} (Priority: {stars} stars {'⭐'*stars})")
     logger.info(f"[Bot] Title: '{title}' | Needed platforms: {needed}")
     logger.info(f"[Bot] YouTube Description Preview: {yt_description[:80]}...")
     _LAST_RUN_INFO["status"] = "uploading"
@@ -108,6 +115,7 @@ def process_next_clip(
                     headless=headless,
                 )
                 if yt_res.ok:
+                    _LAST_RUN_INFO["youtube_daily_limit"] = False
                     ledger.record_upload(
                         clip_path,
                         platform="youtube",
@@ -118,14 +126,19 @@ def process_next_clip(
                     )
                     logger.success(f"[Bot] YouTube Shorts upload SUCCESS for {clip_path.name}!")
                 else:
+                    record_status = "daily_limit" if yt_res.status == "daily_limit" else "failed"
                     ledger.record_upload(
                         clip_path,
                         platform="youtube",
-                        status="failed",
+                        status=record_status,
                         title=title,
                         error=yt_res.error or "Unknown error",
                     )
-                    logger.error(f"[Bot] YouTube upload failed: {yt_res.error}")
+                    if yt_res.status == "daily_limit":
+                        logger.warning(f"[Bot] YouTube channel reached daily upload limit! {yt_res.error}")
+                        _LAST_RUN_INFO["youtube_daily_limit"] = True
+                    else:
+                        logger.error(f"[Bot] YouTube upload failed: {yt_res.error}")
 
                 results["youtube"] = {
                     "ok": yt_res.ok,

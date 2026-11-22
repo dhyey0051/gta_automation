@@ -78,7 +78,7 @@ def disable_scrims(page) -> None:
         pass
 
 
-GLOBAL_LOCK_FILE = Path(__file__).resolve().parent.parent / "data" / "uploader_global.lock"
+GLOBAL_LOCK_FILE = Path("G:/dhyey/automation/neonclipping-main/data/uploader_global.lock")
 
 
 def acquire_global_upload_lock(timeout: float = 240.0) -> bool:

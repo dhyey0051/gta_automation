@@ -36,7 +36,7 @@ def launch_youtube_auth(profile_path: Path = youtube_uploader.DEFAULT_PROFILE_DI
     print("  YOUTUBE STUDIO AUTHENTICATION HELPER")
     print("=" * 60)
     print("1. A Chrome browser window will now open.")
-    print("2. Sign in to your YouTube channel (e.g. my-channel).")
+    print("2. Sign in to your YouTube channel (e.g. adg-cliping).")
     print("3. Once YouTube Studio is loaded and ready, come back here.")
     print("4. Press ENTER in this window to save and exit.")
     print("=" * 60 + "\n")

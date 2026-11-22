@@ -57,13 +57,206 @@ $('batch').onclick=async()=>{const button=$('batch');button.disabled=true;$('exp
 const lazyObserver=('IntersectionObserver' in window)?new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.preload='metadata';e.target.load();lazyObserver.unobserve(e.target);}}),{rootMargin:'400px'}):null;
 function appendVisualReview(parent,review){if(!review?.frames?.length)return;const details=document.createElement('details'),title=document.createElement('summary');title.textContent='AI frame observations';details.append(title);const grid=document.createElement('div');grid.className='vision-grid';review.frames.forEach((frame,index)=>{const figure=document.createElement('figure'),image=document.createElement('img'),caption=document.createElement('figcaption');image.loading='lazy';if(/^\/vision\/frame\/[a-f0-9]{64}\/[012]$/.test(frame.image||''))image.src=frame.image;image.alt='Scene sample '+(index+1);caption.textContent=frame.description;figure.append(image,caption);grid.append(figure);});details.append(grid);parent.append(details);}
 function lazyVideo(v){if(lazyObserver){v.preload='none';lazyObserver.observe(v);}else v.preload='metadata';}
-async function refreshLibrary(){const clips=await request('/library');$('library-count').textContent=clips.length;const host=$('library');host.replaceChildren();if(!clips.length){const empty=document.createElement('div');empty.className='empty-library';empty.textContent='Your first clip belongs here. Export a moment to start your library.';host.append(empty);}for(const clip of clips){const card=document.createElement('article');card.className='clip-card';const video=document.createElement('video');video.src='/media/'+clip.id;video.controls=true;lazyVideo(video);const title=document.createElement('h3');title.textContent=clip.title;const meta=document.createElement('p');meta.textContent=(clip.meta.duration||0).toFixed(1)+' seconds · '+(clip.settings.layout||'stack')+' · '+new Date(clip.created*1000).toLocaleDateString();const links=document.createElement('div');links.className='card-links';const download=document.createElement('a');download.href='/media/'+clip.id;download.download='neonclipping-'+clip.id+'.mp4';download.textContent='↓ MP4';links.append(download);if(clip.srt){const sub=document.createElement('a');sub.href='/text/'+clip.id+'/srt';sub.textContent='↓ SRT';links.append(sub);}const edit=document.createElement('button');edit.textContent='Edit clip';edit.onclick=()=>openSavedClip(clip.id).catch(e=>status(e.message));links.append(edit);card.append(video,title,meta,links);appendVisualReview(card,clip.settings.visual_review);host.append(card);}}
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x===b));$('editor-view').hidden=b.dataset.view!=='editor';$('library-view').hidden=b.dataset.view!=='library';if(b.dataset.view==='library')refreshLibrary().catch(e=>status(e.message));});$('refresh-library').onclick=()=>refreshLibrary().catch(e=>status(e.message));
-request('/highlights').then(showHighlights).catch(e=>status(e.message));refreshLibrary().catch(e=>status(e.message));
+function createStarRatingBar(clipId,currentStars,onUpdate,onDelete){
+ const wrap=document.createElement('div');wrap.className='pref-star-bar';
+ wrap.title='Priority: 6★ Top Tier (Uploads First), 5-2★ Queued, 1★ Auto-Delete Reel';
+ const lbl=document.createElement('span');lbl.style.fontSize='10px';lbl.style.fontWeight='700';lbl.style.color='var(--muted)';lbl.style.marginRight='4px';lbl.textContent='Priority:';
+ wrap.append(lbl);
+ const starButtons=[];
+ for(let s=1;s<=6;s++){
+  const btn=document.createElement('button');btn.type='button';btn.className='star-btn'+(s<=currentStars?' active':'');
+  btn.textContent='★';btn.title=s===1?'1★: Delete this reel':(s===6?'6★: Top Tier (Uploads First!)':`${s}★ Priority`);
+  if(s===1)btn.style.color=s<=currentStars?'#ff6666':'#55333e';
+  btn.onclick=async(e)=>{
+   e.stopPropagation();
+   if(s===1&&!confirm('Rating 1 star will permanently DELETE this reel. Are you sure?'))return;
+   try{
+    const res=await request('/preferences/rate',{clip_id:clipId,stars:s});
+    if(res.deleted){
+     status(`🗑️ Reel ${clipId.slice(0,8)} rated 1 star and deleted.`);
+     if(onDelete)onDelete();
+     if($('preferences-view')&&!$('preferences-view').hidden)refreshPreferences();
+     if($('library-view')&&!$('library-view').hidden)refreshLibrary();
+    }else{
+     status(`⭐ Priority set to ${s} stars for ${clipId.slice(0,8)}`);
+     starButtons.forEach((b,i)=>b.classList.toggle('active',i<s));
+     if(onUpdate)onUpdate(s);
+     if($('preferences-view')&&!$('preferences-view').hidden)refreshPreferences();
+    }
+   }catch(err){status('Failed: '+err.message);}
+  };
+  starButtons.push(btn);wrap.append(btn);
+ }
+ const scoreText=document.createElement('span');scoreText.style.fontSize='11px';scoreText.style.fontWeight='800';scoreText.style.marginLeft='6px';
+ scoreText.style.color=currentStars===6?'var(--pink)':(currentStars>=4?'var(--cyan)':'var(--muted)');
+ scoreText.textContent=`${currentStars}/6★`+(currentStars===6?' (Top Tier)':'');
+ wrap.append(scoreText);
+ return wrap;
+}
 
-let selectedChunk={start:0,end:null,id:'all'};
+function createDeleteButton(clipId,onDeleted){
+ const btn=document.createElement('button');btn.type='button';btn.className='delete-reel-btn';
+ btn.innerHTML='🗑️ Delete';btn.title='Permanently delete this reel from disk';
+ btn.onclick=async(e)=>{
+  e.stopPropagation();
+  if(!confirm('Are you sure you want to delete this reel?'))return;
+  btn.disabled=true;btn.textContent='Deleting...';
+  try{
+   await request('/preferences/delete',{clip_id:clipId});
+   status(`🗑️ Deleted reel ${clipId.slice(0,8)}`);
+   if(onDeleted)onDeleted();
+   if($('preferences-view')&&!$('preferences-view').hidden)refreshPreferences();
+   if($('library-view')&&!$('library-view').hidden)refreshLibrary();
+  }catch(err){status('Delete failed: '+err.message);btn.disabled=false;btn.textContent='🗑️ Delete';}
+ };
+ return btn;
+}
+
+async function refreshLibrary(){
+ const clips=await request('/library');$('library-count').textContent=clips.length;const host=$('library');host.replaceChildren();
+ if(!clips.length){const empty=document.createElement('div');empty.className='empty-library';empty.textContent='Your first clip belongs here. Export a moment to start your library.';host.append(empty);return;}
+ for(const clip of clips){
+  const card=document.createElement('article');card.className='clip-card';
+  const video=document.createElement('video');video.src='/media/'+clip.id;video.controls=true;lazyVideo(video);
+  const title=document.createElement('h3');title.textContent=clip.title;
+  const meta=document.createElement('p');meta.textContent=(clip.meta.duration||0).toFixed(1)+' seconds · '+(clip.settings.layout||'stack')+' · '+new Date(clip.created*1000).toLocaleDateString();
+  const chunkPill=document.createElement('div');chunkPill.className='chunk-source-pill';
+  chunkPill.textContent='⏱️ '+(clip.chunk_label||clip.settings.chunk_label||clip.settings.chunk_range||'Full Video');
+  const starBar=createStarRatingBar(clip.id,clip.stars||3,()=>refreshLibrary(),()=>card.remove());
+  const links=document.createElement('div');links.className='card-links';
+  const download=document.createElement('a');download.href='/media/'+clip.id;download.download='neonclipping-'+clip.id+'.mp4';download.textContent='↓ MP4';links.append(download);
+  if(clip.srt){const sub=document.createElement('a');sub.href='/text/'+clip.id+'/srt';sub.textContent='↓ SRT';links.append(sub);}
+  const edit=document.createElement('button');edit.textContent='Edit clip';edit.onclick=()=>openSavedClip(clip.id).catch(e=>status(e.message));links.append(edit);
+  const delBtn=createDeleteButton(clip.id,()=>card.remove());links.append(delBtn);
+  card.append(video,title,meta,chunkPill,starBar,links);
+  appendVisualReview(card,clip.settings.visual_review);host.append(card);
+ }
+}
+
+async function refreshPreferences(){
+ try{
+  const data=await request('/preferences');
+  const clips=data.clips||[];
+  if($('pref-count'))$('pref-count').textContent=data.pending_upload||clips.length;
+  const host=$('preferences-list');if(!host)return;
+  host.replaceChildren();
+  if(!clips.length){
+   const empty=document.createElement('div');empty.className='empty-library';empty.textContent='No reels in preference queue. Render clips from a stream to rank them here!';
+   host.append(empty);return;
+  }
+  clips.forEach(clip=>{
+   const card=document.createElement('article');card.className='pref-card'+(clip.stars===6?' top-priority':'');
+   const topRow=document.createElement('div');topRow.style.display='flex';topRow.style.justifyContent='space-between';topRow.style.alignItems='center';
+   const rankBadge=document.createElement('span');
+   if(clip.needs_upload){
+    if(clip.queue_position===1){rankBadge.className='pref-rank top-tier';rankBadge.textContent='🔥 #1 NEXT TO UPLOAD';}
+    else if(clip.stars>=5){rankBadge.className='pref-rank tier-high';rankBadge.textContent=`#${clip.queue_position} Next (High)`;}
+    else{rankBadge.className='pref-rank tier-normal';rankBadge.textContent=`#${clip.queue_position} in Queue`;}
+   }else{rankBadge.className='pref-rank tier-uploaded';rankBadge.textContent='✅ Uploaded to All';}
+   const dateSpan=document.createElement('small');dateSpan.className='muted';dateSpan.textContent=clip.created_str||'';
+   topRow.append(rankBadge,dateSpan);
+
+   const vid=document.createElement('video');vid.src='/media/'+clip.id;vid.controls=true;lazyVideo(vid);
+   const title=document.createElement('h3');title.style.margin='4px 0 2px';title.style.fontSize='14px';title.textContent=clip.title;
+   const hookP=document.createElement('p');hookP.className='muted';hookP.style.fontSize='11px';hookP.style.margin='0 0 4px';hookP.textContent=clip.hook?`"${clip.hook}"`:'';
+   const chunkPill=document.createElement('div');chunkPill.className='chunk-source-pill';
+   chunkPill.textContent='⏱️ '+(clip.chunk_label?clip.chunk_label:(clip.chunk_range?clip.chunk_range:'Full Video'));
+
+   const platRow=document.createElement('div');platRow.style.display='flex';platRow.style.gap='8px';platRow.style.fontSize='11px';platRow.style.margin='4px 0';
+   platRow.innerHTML=`<span style="color:${clip.youtube_uploaded?'#22c55e':'var(--pink)'}">${clip.youtube_uploaded?'✅':'⏳'} YouTube Shorts</span><span style="color:${clip.instagram_uploaded?'#22c55e':'var(--pink)'}">${clip.instagram_uploaded?'✅':'⏳'} Instagram Reels</span>`;
+
+   const starBar=createStarRatingBar(clip.id,clip.stars||3,()=>refreshPreferences(),()=>card.remove());
+
+   const actions=document.createElement('div');actions.style.display='flex';actions.style.gap='8px';actions.style.marginTop='6px';actions.style.flexWrap='wrap';
+   const delBtn=createDeleteButton(clip.id,()=>card.remove());
+   const upBtn=document.createElement('button');upBtn.className='primary';upBtn.style.fontSize='11px';upBtn.style.padding='6px 10px';upBtn.textContent='⚡ Upload Now';
+   upBtn.onclick=async()=>{
+    upBtn.disabled=true;upBtn.textContent='Publishing...';
+    try{
+     const r=await request('/publish',{clip_id:clip.id,title:clip.title,hook:clip.hook});
+     upBtn.textContent=r.ok?'✅ Published!':'Check status';
+     setTimeout(()=>{refreshPreferences();updateBotWidget();},1200);
+    }catch(e){upBtn.textContent='Failed: '+e.message;upBtn.disabled=false;}
+   };
+   const dl=document.createElement('a');dl.href='/media/'+clip.id;dl.download='neonclipping-'+clip.id+'.mp4';dl.className='secondary';dl.style.fontSize='11px';dl.style.padding='6px 10px';dl.textContent='↓ MP4';
+   actions.append(delBtn,upBtn,dl);
+
+   card.append(topRow,vid,title,hookP,chunkPill,platRow,starBar,actions);
+   host.append(card);
+  });
+ }catch(err){status('Could not load preferences: '+err.message);}
+}
+
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x===b));
+ $('editor-view').hidden=b.dataset.view!=='editor';
+ $('library-view').hidden=b.dataset.view!=='library';
+ if($('preferences-view'))$('preferences-view').hidden=b.dataset.view!=='preferences';
+ if(b.dataset.view==='library')refreshLibrary().catch(e=>status(e.message));
+ if(b.dataset.view==='preferences')refreshPreferences().catch(e=>status(e.message));
+});
+$('refresh-library').onclick=()=>refreshLibrary().catch(e=>status(e.message));
+if($('refresh-preferences'))$('refresh-preferences').onclick=()=>refreshPreferences().catch(e=>status(e.message));
+if($('bulk-delete-1star-btn'))$('bulk-delete-1star-btn').onclick=async()=>{
+ if(!confirm('Are you sure you want to delete all 1-star rated reels?'))return;
+ try{
+  const res=await request('/preferences/bulk_delete_1star');
+  status(`🗑️ Deleted ${res.deleted_count} 1-star reels.`);
+  refreshPreferences();refreshLibrary();
+ }catch(e){status(e.message);}
+};
+
+request('/highlights').then(showHighlights).catch(e=>status(e.message));
+refreshLibrary().catch(e=>status(e.message));
+refreshPreferences().catch(e=>status(e.message));
+
+let selectedChunk={start:0,end:null,id:'all',label:'Full Video',range:'00:00 - End'};
 let allChunksList=[];
+let skippedChunks=new Set();
 let probeDebounce=null;
+
+function updateChunkSummary(){
+ if(!$('chunk-summary'))return;
+ const nonAll=(allChunksList||[]).filter(c=>c.id!=='all');
+ if(!nonAll.length){$('chunk-summary').textContent='';return;}
+ const activeCount=nonAll.length-skippedChunks.size;
+ $('chunk-summary').textContent=`${activeCount}/${nonAll.length} chunks active · ${skippedChunks.size} skipped`;
+}
+
+function selectChunk(c,chipElem){
+ selectedChunk={start:c.start,end:c.end,id:c.id,label:c.label,range:c.label};
+ if($('chunk-chips')){
+  [...$('chunk-chips').children].forEach(x=>{
+   if(!x.classList.contains('chunk-skipped'))x.classList.remove('on');
+  });
+  if(chipElem&&!chipElem.classList.contains('chunk-skipped'))chipElem.classList.add('on');
+ }
+ status(c.id==='all'?'Full video selected for clipping.':`Chunk selected: ${c.label}. Download & clipping will focus on this slice.`);
+}
+
+function toggleSkipChunk(c,chipElem){
+ if(c.id==='all'){status('Cannot skip the full video option.');return;}
+ if(skippedChunks.has(c.id)){
+  skippedChunks.delete(c.id);
+  chipElem.classList.remove('chunk-skipped');
+  const b=chipElem.querySelector('.chunk-badge-skipped');if(b)b.remove();
+  status(`Unskipped: ${c.label}. It will be used for clipping.`);
+ }else{
+  skippedChunks.add(c.id);
+  chipElem.classList.remove('on');
+  chipElem.classList.add('chunk-skipped');
+  if(!chipElem.querySelector('.chunk-badge-skipped')){
+   const b=document.createElement('span');b.className='chunk-badge-skipped';b.textContent='🚫 SKIPPED';chipElem.append(b);
+  }
+  status(`🚫 Chunk skipped (grayish): ${c.label}. Will NOT be clipped!`);
+  if(selectedChunk.id===c.id){
+   const firstActive=(allChunksList||[]).find(x=>x.id!=='all'&&!skippedChunks.has(x.id))||allChunksList[0];
+   if(firstActive)selectChunk(firstActive);
+  }
+ }
+ updateChunkSummary();
+}
+
 async function fetchChunksForUrl(rawUrl){
  const url=(rawUrl||'').trim();
  if(!url||!url.startsWith('http')){if($('chunk-section'))$('chunk-section').hidden=true;return;}
@@ -76,10 +269,60 @@ async function fetchChunksForUrl(rawUrl){
   if($('chunk-chips')){$('chunk-chips').replaceChildren();
    (data.chunks||[]).forEach((c,idx)=>{
     const chip=document.createElement('button');chip.type='button';chip.className='chip'+(c.id===selectedChunk.id||(!selectedChunk.id&&idx===0)?' on':'');
-    chip.style.fontSize='11px';chip.style.padding='6px 12px';chip.textContent=c.label;
-    chip.onclick=()=>{selectedChunk={start:c.start,end:c.end,id:c.id};[...$('chunk-chips').children].forEach(x=>x.classList.remove('on'));chip.classList.add('on');status(c.id==='all'?'Full video selected for clipping.':`Chunk selected: ${c.label}. Download & clipping will focus on this 1-hour slice.`);};
+    if(skippedChunks.has(c.id))chip.classList.add('chunk-skipped');
+    chip.style.fontSize='11px';chip.style.padding='6px 12px';
+    const labelSpan=document.createElement('span');labelSpan.textContent=c.label;chip.append(labelSpan);
+
+    if(c.clips_count>0){
+     const countBadge=document.createElement('span');countBadge.className='chunk-badge-count';
+     countBadge.title=`${c.clips_count} reels already extracted from this chunk`;
+     countBadge.textContent=`🔥 ${c.clips_count} reel${c.clips_count>1?'s':''}`;
+     chip.append(countBadge);
+    }
+    if(skippedChunks.has(c.id)){
+     const skipBadge=document.createElement('span');skipBadge.className='chunk-badge-skipped';skipBadge.textContent='🚫 SKIPPED';chip.append(skipBadge);
+    }
+
+    let clickCount=0;let clickTimer=null;
+    chip.onclick=(e)=>{
+     if(e.target.tagName==='A'||e.target.classList.contains('chunk-action-btn'))return;
+     clickCount++;clearTimeout(clickTimer);
+     if(clickCount===1){
+      clickTimer=setTimeout(()=>{
+       if(!skippedChunks.has(c.id))selectChunk(c,chip);
+       else status(`Chunk is currently skipped. Click 3 times or click [Unskip] to enable.`);
+       clickCount=0;
+      },350);
+     }else if(clickCount===2){
+      clickTimer=setTimeout(()=>{
+       if(skippedChunks.has(c.id))toggleSkipChunk(c,chip);
+       selectChunk(c,chip);
+       status(`⚡ Double-click: Starting clipping from ${c.label}!`);
+       clickCount=0;$('make').click();
+      },350);
+     }else if(clickCount>=3){
+      clickCount=0;toggleSkipChunk(c,chip);
+     }
+    };
+    chip.ondblclick=(e)=>{
+     e.preventDefault();clearTimeout(clickTimer);clickCount=0;
+     if(skippedChunks.has(c.id))toggleSkipChunk(c,chip);
+     selectChunk(c,chip);status(`⚡ Double-click: Starting clipping from ${c.label}!`);$('make').click();
+    };
+
+    if(c.id!=='all'){
+     const skipBtn=document.createElement('span');skipBtn.className='chunk-action-btn';
+     skipBtn.textContent=skippedChunks.has(c.id)?'Unskip':'Skip (3x)';
+     skipBtn.title='Click 3 times or click here to skip this chunk';
+     skipBtn.onclick=(e)=>{
+      e.stopPropagation();toggleSkipChunk(c,chip);
+      skipBtn.textContent=skippedChunks.has(c.id)?'Unskip':'Skip (3x)';
+     };
+     chip.append(skipBtn);
+    }
     $('chunk-chips').append(chip);
    });
+   updateChunkSummary();
   }
  }catch(e){if($('chunk-section'))$('chunk-section').hidden=true;}
 }
@@ -169,31 +412,38 @@ if($('bot-trigger-btn')){$('bot-trigger-btn').onclick=async()=>{
 $('make').onclick=async()=>{const url=$('url').value.trim();if(!url&&!id){status('Paste a video link or upload a file first.');return;}
  const b=$('make');b.disabled=true;$('make-results').hidden=false;$('make-results').querySelector('.star-ask')?.remove();$('make-grid').replaceChildren();$('make-progress').style.width='2%';
  const chosenCount=Number(($('quick-count')||{}).value)||Number($('count').value)||4;
- try{const {job}=await request('/make',{...(url?{url}:{id}),chunk_start:(selectedChunk?selectedChunk.start:null),chunk_end:(selectedChunk&&selectedChunk.id!=='all'?selectedChunk.end:null),auto_upload:$('auto-upload')?$('auto-upload').checked:true,count:chosenCount,mode:$('mode').value,source_height:Number(($('srcq')||{}).value)||1080,accurate:$('accurate').value,min_len:Number($('minlen').value),max_len:Number($('length').value),layout:makeLayout(),aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),cam:rect.cam,game:rect.game,top:Number($('top').value)/100,caption_style:style,language:$('language').value==='auto'?'':$('language').value});
+ try{const {job}=await request('/make',{...(url?{url}:{id}),chunk_start:(selectedChunk?selectedChunk.start:null),chunk_end:(selectedChunk&&selectedChunk.id!=='all'?selectedChunk.end:null),chunk_id:(selectedChunk?selectedChunk.id:null),chunk_label:(selectedChunk?selectedChunk.label:null),chunk_range:(selectedChunk?selectedChunk.range:null),auto_upload:$('auto-upload')?$('auto-upload').checked:true,count:chosenCount,mode:$('mode').value,source_height:Number(($('srcq')||{}).value)||1080,accurate:$('accurate').value,min_len:Number($('minlen').value),max_len:Number($('length').value),layout:makeLayout(),aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),cam:rect.cam,game:rect.game,top:Number($('top').value)/100,caption_style:style,language:$('language').value==='auto'?'':$('language').value});
   const shown=new Set();
   for(;;){const s=await request('/make/'+job);$('make-status').textContent=(s.stage||s.status)+' · '+Math.round((s.progress||0)*100)+'%';$('make-progress').style.width=Math.max(2,(s.progress||0)*100)+'%';
    (s.clips||[]).forEach(c=>{if(shown.has(c.file))return;shown.add(c.file);const d=document.createElement('div');d.className='mk';d.dataset.file=c.file;
     if(c.error){d.textContent='Failed: '+c.error.slice(0,120);}else{const vid=document.createElement('video');vid.src='/media/'+c.file;vid.controls=true;vid.preload='metadata';const t=document.createElement('b');t.textContent=c.title;const m=document.createElement('small');m.textContent=Math.round(c.start)+'–'+Math.round(c.end)+'s · score '+c.score+(c.hook?' · "'+c.hook+'"':'');const a=document.createElement('a');a.href='/media/'+c.file;a.download='neonclipping-'+c.file+'.mp4';a.textContent='Download MP4';const rs=document.createElement('small');rs.textContent=c.reason||'';const vb=document.createElement('div');vb.className='viral';const ax=c.axes||{};const fmt=v=>v==null?'–':v;vb.title='Viral score is a heuristic: loudness, shouting, what is said, on-screen action and a local AI read. Your star ratings tune it.';vb.innerHTML='<b>🔥 Viral '+(c.viral??'–')+'</b><span>Energy '+fmt(ax.energy)+'</span><span>Action '+fmt(ax.action)+'</span><span>Words '+fmt(ax.words)+'</span><span>AI '+fmt(ax.ai)+'</span>';const stars=document.createElement('div');stars.className='stars';stars.title='Rate this clip: it teaches NeonClipping what a good clip is';
     for(let n=1;n<=5;n++){const sb=document.createElement('button');sb.textContent='★';sb.onclick=async()=>{try{const r=await request('/feedback',{file:c.file,rating:n});[...stars.children].forEach((x,i)=>x.classList.toggle('on',i<n));fb.textContent='Thanks! Learning from '+r.ratings+' rating'+(r.ratings===1?'':'s')+(r.fitted?' · '+(r.insight[0]||''):' (needs 8 to start adapting)');}catch(e){fb.textContent=e.message;}};stars.append(sb);}
-    const fb=document.createElement('small');fb.className='fb';fb.textContent='Rate this clip ↑';const edit=document.createElement('button');edit.textContent='Edit clip';edit.onclick=()=>openSavedClip(d.dataset.file).catch(e=>status(e.message));const upBtn=document.createElement('button');upBtn.className='primary';upBtn.style.marginTop='6px';upBtn.style.display='block';upBtn.textContent='🚀 Upload to YouTube & IG';upBtn.onclick=async()=>{upBtn.disabled=true;upBtn.textContent='Publishing...';try{const r=await request('/publish',{clip_id:c.file,title:c.title,hook:c.hook});upBtn.textContent=r.ok?'✅ Published!':'Check status';setTimeout(updateBotWidget,1000);}catch(e){upBtn.textContent='Failed: '+e.message;upBtn.disabled=false;}};d.append(vid,t,vb,m,rs,a,edit,upBtn,stars,fb);}
+    const fb=document.createElement('small');fb.className='fb';fb.textContent='Rate this clip ↑';const edit=document.createElement('button');edit.textContent='Edit clip';edit.onclick=()=>openSavedClip(d.dataset.file).catch(e=>status(e.message));const upBtn=document.createElement('button');upBtn.className='primary';upBtn.style.marginTop='6px';upBtn.style.display='block';upBtn.textContent='🚀 Upload to YouTube & IG';upBtn.onclick=async()=>{upBtn.disabled=true;upBtn.textContent='Publishing...';try{const r=await request('/publish',{clip_id:c.file,title:c.title,hook:c.hook});upBtn.textContent=r.ok?'✅ Published!':'Check status';setTimeout(()=>{updateBotWidget();if($('preferences-view')&&!$('preferences-view').hidden)refreshPreferences();},1000);}catch(e){upBtn.textContent='Failed: '+e.message;upBtn.disabled=false;}};
+const chunkBadge=document.createElement('div');chunkBadge.className='chunk-source-pill';chunkBadge.textContent='⏱️ '+(c.chunk_label||(selectedChunk?selectedChunk.label:'Full Video'));
+const starBar=createStarRatingBar(c.file,3,()=>{if($('preferences-view')&&!$('preferences-view').hidden)refreshPreferences();},()=>d.remove());
+const delBtn=createDeleteButton(c.file,()=>d.remove());
+d.append(vid,t,chunkBadge,vb,m,rs,a,edit,upBtn,starBar,delBtn);}
     appendVisualReview(d,c.visual_review);$('make-grid').append(d);});
    if(s.status==='error')throw Error(s.error);if(s.status==='done'){
     if(!(s.clips||[]).length){$('make-status').textContent=s.stage||'No moments matched. Broaden your filters and try again.';break;}
     $('make-status').textContent='Done · '+(s.clips||[]).length+' clips in '+s.elapsed_seconds+'s · also in My clips ('+(s.engine||'')+')';
-    setTimeout(updateBotWidget,1200);
-    // Auto-roll chunks pipeline: if enabled, move to next hour chunk automatically!
+    setTimeout(()=>{updateBotWidget();refreshPreferences();refreshLibrary();},1200);
+    // Auto-roll chunks pipeline: if enabled, move to next hour chunk automatically (skipping grayish skipped chunks!)
     if($('chunk-autoroll')&&$('chunk-autoroll').checked&&selectedChunk&&selectedChunk.id!=='all'){
      const hourChunks=(allChunksList||[]).filter(c=>c.id!=='all');
      const currIdx=hourChunks.findIndex(c=>c.id===selectedChunk.id);
-     if(currIdx!==-1&&currIdx+1<hourChunks.length){
-      const nextChunk=hourChunks[currIdx+1];
+     let nextChunk=null;
+     for(let i=currIdx+1;i<hourChunks.length;i++){
+      if(!skippedChunks.has(hourChunks[i].id)){nextChunk=hourChunks[i];break;}
+     }
+     if(nextChunk){
       const autoMsg=`🎉 ${selectedChunk.id} done! 🔄 Auto-rolling to next: ${nextChunk.label} in 5s...`;
       $('make-status').textContent=autoMsg;status(autoMsg);
-      selectedChunk={start:nextChunk.start,end:nextChunk.end,id:nextChunk.id};
+      selectChunk(nextChunk);
       [...($('chunk-chips')?$('chunk-chips').children:[])].forEach(x=>{x.classList.toggle('on',x.textContent.includes(nextChunk.short_label));});
       setTimeout(()=>{if($('chunk-autoroll')&&$('chunk-autoroll').checked){$('make').click();}},5000);
       break;
-     }else{status('🎉 All stream chunks have been clipped and processed!');}
+     }else{status('🎉 All active non-skipped stream chunks have been clipped and processed!');}
     }
     if(!$('make-results').querySelector('.star-ask')){const q=document.createElement('div');q.className='star-ask';q.innerHTML='Free and open-source. If these clips saved you time, <a href="https://github.com/iamajmeena/neonclipping" target="_blank" rel="noopener">★ star NeonClipping on GitHub</a> and follow <a href="https://www.instagram.com/iamajmeena/" target="_blank" rel="noopener">@iamajmeena</a> for more tools.';$('make-results').append(q);}break;}
    await sleep(1000);}}catch(e){$('make-status').textContent=e.message;}finally{b.disabled=false;}};

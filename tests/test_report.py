@@ -31,7 +31,7 @@ class Redact(unittest.TestCase):
         self.assertNotIn('JiVLpGU4FQ4', out)
 
     def test_user_names_in_paths(self):
-        self.assertNotIn('WeDream', report.redact(r'~/Desktop\video\x.mp4 missing'))
+        self.assertNotIn('WeDream', report.redact(r'C:\Users\WeDream\Desktop\video\x.mp4 missing'))
         self.assertNotIn('priya', report.redact('/home/priya/clips/a.mp4'))
 
     def test_email_ip_secrets_and_long_ids(self):
@@ -59,7 +59,7 @@ class Log(unittest.TestCase):
             p.unlink()
 
     def test_log_is_redacted_and_readable(self):
-        report.log_error('Downloading', r'boom https://youtu.be/AbC in ~/x')
+        report.log_error('Downloading', r'boom https://youtu.be/AbC in C:\Users\Asha\x')
         rows = report.recent_errors()
         self.assertEqual(len(rows), 1)
         raw = (Path(_tmp.name) / 'errors.log').read_text(encoding='utf-8')
@@ -81,7 +81,7 @@ class Log(unittest.TestCase):
 
 class Diagnostics(unittest.TestCase):
     def test_contains_versions_not_identity(self):
-        report.log_error('x', r'~/a.mp4 failed')
+        report.log_error('x', r'C:\Users\Meena\a.mp4 failed')
         text = report.diagnostics('my note with https://youtu.be/QWERTY12345 link')
         self.assertIn('python:', text)
         self.assertIn('yt_dlp:', text)

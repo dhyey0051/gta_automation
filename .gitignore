@@ -1,30 +1,59 @@
-# Python
+# whitelist: only source ships
+*
+!.gitignore
+!LICENSE
+!README.md
+!requirements.txt
+!run.ps1
+!run.sh
+!*.py
+!index.html
+!app.js
+!style.css
+!docs/
+!docs/*.jpg
+!docs/*.pdf
+!docs/*.gif
+!docs/guide/
+!docs/guide/*
+highlights_v1.py
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.venv/
-env/
-venv/
-ENV/
+!docs/*.txt
+!live/
+!donate.json
+!live/*
 
-# Data, media outputs & sessions
-data/
-output/
-*.mp4
-*.wav
-*.part
-*.ytdl
-*.db
-*.sqlite3
-*.lock
-*.log
+!tests/
+!tests/*.py
 
-# Environment & secrets
-.env
-.env.*
-*.secret
+!docs/*.md
+!install.ps1
+!install.sh
+!NeonClipping-Setup.bat
+!docs/.nojekyll
+!docs/*.mp4
 
-# Operating system
-.DS_Store
-Thumbs.db
+!tests/REPORT.md
+!tests/report.json
+!tests/fixes.json
+
+!models/
+!models/*.onnx
+
+!extras.js
+!transcripts.js
+!vision.js
+
+!mobile.html
+
+!report.js
+!.github/
+!.github/ISSUE_TEMPLATE/
+!.github/ISSUE_TEMPLATE/*
+!tools/
+!tools/report-worker/
+!tools/report-worker/*
+
+!.gitattributes
+!.github/workflows/
+!.github/workflows/*

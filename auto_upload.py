@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from uploader import auth, bot, browser_utils, instagram_uploader, ledger, youtube_uploader
 import threading
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path("G:/dhyey/automation/neonclipping-main")
 DATA_DIR = BASE_DIR / "data"
 _UPLOAD_LOCK = threading.Lock()
 
@@ -24,7 +24,7 @@ def check_auth_status() -> Dict[str, Any]:
     ig_ok, ig_msg = instagram_uploader.check_auth()
     return {
         "youtube": {
-            "account": "my-channel",
+            "account": "adg-cliping",
             "authenticated": yt_ok,
             "message": yt_msg,
             "profile_dir": str(youtube_uploader.DEFAULT_PROFILE_DIR),
@@ -80,7 +80,8 @@ def publish_clip(
                     if yt_res.ok:
                         ledger.record_upload(path, "youtube", "success", title=effective_title, remote_url=yt_res.remote_url or "", remote_id=yt_res.remote_id or "")
                     else:
-                        ledger.record_upload(path, "youtube", "failed", title=effective_title, error=yt_res.error or "")
+                        record_status = "daily_limit" if yt_res.status == "daily_limit" else "failed"
+                        ledger.record_upload(path, "youtube", record_status, title=effective_title, error=yt_res.error or "")
                     results["youtube"] = {"ok": yt_res.ok, "url": yt_res.remote_url, "error": yt_res.error}
 
             if "instagram" in target_platforms:

@@ -4,7 +4,7 @@
     "youtube",
     "instagram"
   ],
-  "youtube_account": "my-channel",
+  "youtube_account": "adg-cliping",
   "instagram_account": "ADG",
   "default_llm": "deepseek",
   "llm_priority": [

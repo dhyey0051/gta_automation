@@ -3,7 +3,7 @@ uploader/youtube_uploader.py — Synchronous YouTube Shorts Uploader
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Ported directly from the verified pipeline in YouTube-Shorts-Automation-main
 with enhanced resilient fallback handling and remote URL extraction.
-Uses persistent Playwright profile: data/profiles/youtube__my-channel.
+Uses persistent Playwright profile: data/profiles/youtube__adg-cliping.
 """
 
 from __future__ import annotations
@@ -28,10 +28,51 @@ if sys.platform == "win32":
         pass
 
 # Default persistent profile paths
-DEFAULT_PROFILE_DIR = Path(os.environ.get("YOUTUBE_PROFILE_DIR", Path(__file__).resolve().parent.parent / "data" / "profiles" / "youtube"))
-ALT_PROFILE_DIR = Path("data/profiles/youtube_alt")
-STUDIO_URL = "https://studio.youtube.com"
+DEFAULT_PROFILE_DIR = Path("G:/dhyey/automation/clipops/data/profiles/youtube__adg-cliping")
+ALT_PROFILE_DIR = Path("G:/dhyey/automation/clipops/data/profiles/youtube__adg-clip")
+STUDIO_URL = "https://studio.youtube.com?approve_browser_access=true"
 DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+
+
+def _save_debug_screenshot(page, prefix: str) -> Path:
+    """Save debug screenshot for uploader troubleshooting."""
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    err_img = Path("G:/dhyey/automation/neonclipping-main/data/uploader_debug") / f"{prefix}_{timestamp}.png"
+    err_img.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(err_img))
+        logger.info(f"[YT] Saved debug screenshot to {err_img.name}")
+    except Exception:
+        pass
+    return err_img
+
+
+def _is_daily_limit_reached(page) -> bool:
+    """Check if YouTube has blocked uploads with 'Daily upload limit reached'."""
+    try:
+        if page.get_by_text("Daily upload limit reached").count() > 0:
+            return True
+        if page.locator("text=Daily upload limit reached").count() > 0:
+            return True
+        content = page.content().lower()
+        if "daily upload limit" in content or "upload more videos daily after a one-time verification" in content:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _dismiss_interstitials(page) -> None:
+    """Dismiss YouTube Studio 'Improve your experience' interstitial if present."""
+    try:
+        if "Improve your experience" in page.content():
+            skip_link = page.locator("a:has-text('SKIP TO YOUTUBE STUDIO'), a:has-text('Skip to YouTube Studio')").first
+            if skip_link.count() > 0 and skip_link.is_visible():
+                logger.info("[YT] Dismissing 'Improve your experience' interstitial...")
+                skip_link.click()
+                page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -85,6 +126,7 @@ def check_auth(profile_path: Optional[Path | str] = None) -> tuple[bool, str]:
             page.set_default_timeout(25000)
             page.goto(STUDIO_URL, wait_until="networkidle", timeout=30000)
             time.sleep(3)
+            _dismiss_interstitials(page)
 
             if _detect_login_redirect(page.url) or "accounts.google.com" in page.url or "signin" in page.url:
                 return False, f"Not signed in; redirected to Google login: {page.url}"
@@ -176,6 +218,7 @@ def upload_to_youtube(
                 logger.info("[YT] Navigating to YouTube Studio...")
                 page.goto(STUDIO_URL, wait_until="networkidle", timeout=35000)
                 time.sleep(3)
+                _dismiss_interstitials(page)
 
                 if _detect_login_redirect(page.url) or "accounts.google.com" in page.url or "signin" in page.url:
                     logger.error("[YT] Session expired or not signed in! Manual re-auth required via AUTH_YOUTUBE.bat.")
@@ -320,10 +363,34 @@ def upload_to_youtube(
                         logger.info("[YT] Audience already set to Not made for kids.")
                 time.sleep(1)
 
+                # Check for daily upload limit right after details modal appears
+                if _is_daily_limit_reached(page):
+                    logger.error("[YT] YouTube Daily Upload Limit reached on this channel!")
+                    _save_debug_screenshot(page, "yt_daily_limit")
+                    browser.close()
+                    return YouTubePublishResult(
+                        ok=False,
+                        status="daily_limit",
+                        error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                    )
+
                 # Next steps until Visibility (3 steps)
                 logger.info("[YT] Advancing wizard steps...")
+                advanced_all_steps = True
                 for step_num in range(1, 4):
                     disable_scrims(page)
+                    time.sleep(1)
+
+                    if _is_daily_limit_reached(page):
+                        logger.error(f"[YT] YouTube Daily Upload Limit reached at step {step_num}!")
+                        _save_debug_screenshot(page, "yt_daily_limit")
+                        browser.close()
+                        return YouTubePublishResult(
+                            ok=False,
+                            status="daily_limit",
+                            error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                        )
+
                     # Next button inside ytcp-uploads-dialog with 'Next' text
                     next_btn = page.locator("ytcp-uploads-dialog #next-button, #next-button").filter(has_text="Next").first
                     if next_btn.count() == 0 or not next_btn.is_visible():
@@ -331,18 +398,53 @@ def upload_to_youtube(
 
                     if next_btn.count() > 0 and next_btn.is_visible():
                         try:
+                            # Check if disabled
+                            is_disabled = (
+                                next_btn.get_attribute("aria-disabled") == "true"
+                                or next_btn.get_attribute("disabled") is not None
+                            )
+                            if is_disabled:
+                                logger.warning(f"[YT] Next button is disabled at step {step_num}")
+                                if _is_daily_limit_reached(page):
+                                    logger.error("[YT] Daily upload limit banner is blocking Next button!")
+                                    _save_debug_screenshot(page, "yt_daily_limit")
+                                    browser.close()
+                                    return YouTubePublishResult(
+                                        ok=False,
+                                        status="daily_limit",
+                                        error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                                    )
+                                advanced_all_steps = False
+                                break
+
                             next_btn.click(force=True, timeout=5000)
                             logger.info(f"[YT] Clicked Next step {step_num}")
-                        except Exception:
+                        except Exception as click_err:
+                            logger.warning(f"[YT] Failed clicking Next button: {click_err}")
                             page.evaluate("() => { const b = document.querySelector('ytcp-uploads-dialog #next-button'); if(b) b.click(); }")
                     else:
-                        # Fallback: click step badge 3 (Visibility) directly
-                        logger.info(f"[YT] Next button not visible, clicking Visibility badge directly...")
-                        try:
-                            page.locator("#step-badge-3").click(force=True, timeout=5000)
-                        except Exception:
-                            pass
-                    time.sleep(2.5)
+                        logger.warning(f"[YT] Next button not visible at step {step_num}")
+                        if _is_daily_limit_reached(page):
+                            logger.error("[YT] Daily upload limit banner detected!")
+                            _save_debug_screenshot(page, "yt_daily_limit")
+                            browser.close()
+                            return YouTubePublishResult(
+                                ok=False,
+                                status="daily_limit",
+                                error="Daily upload limit reached on YouTube channel. Complete 1-time phone verification in YouTube Studio, or wait 24h.",
+                            )
+                        advanced_all_steps = False
+                        break
+                    time.sleep(2)
+
+                if not advanced_all_steps:
+                    _save_debug_screenshot(page, "yt_wizard_step_failed")
+                    browser.close()
+                    return YouTubePublishResult(
+                        ok=False,
+                        status="failed",
+                        error="Could not advance to Visibility step. Next button was disabled or hidden.",
+                    )
 
                 # 4. Visibility / Schedule Step
                 disable_scrims(page)
@@ -406,73 +508,66 @@ def upload_to_youtube(
                     except Exception:
                         page.evaluate("() => { const b = document.querySelector('ytcp-uploads-dialog #done-button, #done-button'); if(b) b.click(); }")
 
-                # 5. Wait for upload confirmation (share dialog or progress completion)
+                # 5. Wait for REAL upload confirmation (share dialog or video published indicator)
                 logger.info("[YT] Waiting for upload success confirmation (up to 360s)...")
                 start_wait = time.monotonic()
                 confirmed = False
+                remote_url = None
+                remote_id = None
+
                 while time.monotonic() - start_wait < 360:
                     # Check for share dialog
                     share_dialog = page.locator("ytcp-video-share-dialog").first
                     if share_dialog.count() > 0 and share_dialog.is_visible():
                         logger.success("[YT] Share dialog appeared! Video published successfully.")
                         confirmed = True
-                        break
-
-                    # Check for "Video processing" or "Video published" or "Checks complete" modal
-                    has_processing = (
-                        page.get_by_text("Video processing").count() > 0 or
-                        page.get_by_text("Video published").count() > 0 or
-                        page.get_by_text("Checks complete").count() > 0 or
-                        page.locator("ytcp-video-share-dialog").count() > 0
-                    )
-                    if has_processing:
-                        logger.success("[YT] Video upload/processing dialog detected! Video published successfully.")
-                        close_btn = page.get_by_role("button", name="Close").first
+                        try:
+                            share_link = share_dialog.locator("a[href*='youtu.be'], a[href*='youtube.com/watch'], a.ytcp-video-info").first
+                            if share_link.count() > 0:
+                                remote_url = share_link.get_attribute("href")
+                        except Exception:
+                            pass
+                        # Close share dialog
+                        close_btn = share_dialog.locator("ytcp-button#close-button, button:has-text('Close')").first
                         if close_btn.count() > 0 and close_btn.is_visible():
                             try:
                                 close_btn.click()
                             except Exception:
                                 pass
+                        break
+
+                    # Check for "Video published" or "Short published" confirmation text
+                    if page.get_by_text("Video published").count() > 0 or page.get_by_text("Short published").count() > 0:
+                        logger.success("[YT] Video/Short published confirmation detected!")
                         confirmed = True
                         break
 
-                    # Check for standalone Close button in active modal
-                    close_btn = page.locator("ytcp-button#close-button, ytcp-button:has-text('Close'), button:has-text('Close')").first
-                    if close_btn.count() > 0 and close_btn.is_visible():
-                        logger.success("[YT] Close button active in modal; closing.")
-                        try:
-                            close_btn.click()
-                        except Exception:
-                            pass
+                    # Check if the upload dialog completely disappeared after publish was clicked
+                    upload_dialog = page.locator("ytcp-uploads-dialog").first
+                    if upload_dialog.count() == 0 or not upload_dialog.is_visible():
+                        logger.success("[YT] Upload dialog dismissed after publishing!")
                         confirmed = True
                         break
 
                     time.sleep(3)
 
                 if not confirmed:
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    err_img = Path("./data/uploader_debug") / f"yt_upload_timeout_{timestamp}.png"
-                    err_img.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        page.screenshot(path=str(err_img))
-                        logger.info(f"[YT] Saved timeout screenshot to {err_img}")
-                    except Exception:
-                        pass
-                    raise PlaywrightTimeoutError("Timeout waiting for YouTube upload confirmation (360s exceeded)")
+                    err_img = _save_debug_screenshot(page, "yt_upload_timeout")
+                    raise PlaywrightTimeoutError(f"Timeout waiting for YouTube upload confirmation (360s exceeded). Debug saved to {err_img.name}")
 
-                # Extract video URL if available
-                remote_url = None
-                remote_id = None
-                try:
-                    share_link = page.locator("a[href*='youtu.be'], a[href*='youtube.com/watch'], a.ytcp-video-info").first
-                    if share_link.count() > 0:
-                        remote_url = share_link.get_attribute("href")
-                        if remote_url:
-                            m = re.search(r"youtu\.be/([a-zA-Z0-9_-]+)", remote_url) or re.search(r"v=([a-zA-Z0-9_-]+)", remote_url)
-                            if m:
-                                remote_id = m.group(1)
-                except Exception as e:
-                    logger.debug(f"[YT] Could not extract link from share dialog: {e}")
+                # Extract video URL if not already captured
+                if not remote_url:
+                    try:
+                        share_link = page.locator("a[href*='youtu.be'], a[href*='youtube.com/watch'], a.ytcp-video-info").first
+                        if share_link.count() > 0:
+                            remote_url = share_link.get_attribute("href")
+                    except Exception as e:
+                        logger.debug(f"[YT] Could not extract link: {e}")
+
+                if remote_url:
+                    m = re.search(r"youtu\.be/([a-zA-Z0-9_-]+)", remote_url) or re.search(r"v=([a-zA-Z0-9_-]+)", remote_url)
+                    if m:
+                        remote_id = m.group(1)
 
                 logger.success(f"[YT] Successfully uploaded to YouTube Shorts: {remote_url or path.name}")
                 browser.close()

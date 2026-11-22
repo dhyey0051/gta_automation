@@ -37,7 +37,7 @@ if not defined NEONCLIPPING_MODEL (
 
 echo.
 echo [LLM Priority] DeepSeek (freemodel/deepseek-v4-pro-max) -> Fallback: Gemini
-echo [Auto-Upload] Mode: %NEONCLIPPING_AUTO_UPLOAD% (YouTube: my-channel, Instagram: ADG)
+echo [Auto-Upload] Mode: %NEONCLIPPING_AUTO_UPLOAD% (YouTube: adg-cliping, Instagram: ADG)
 echo NeonClipping running. Press Ctrl+C to stop.
 echo.
 ".venv\Scripts\python.exe" app.py

@@ -21,7 +21,7 @@ from loguru import logger
 
 from uploader import ai_metadata
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path("G:/dhyey/automation/neonclipping-main")
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "upload_ledger.db"
 JSON_HISTORY_PATH = DATA_DIR / "upload_history.json"
@@ -72,6 +72,16 @@ def init_db() -> None:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_hash_platform ON uploads(file_hash, platform);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON uploads(status);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clip_preferences (
+                    clip_id TEXT PRIMARY KEY,
+                    file_name TEXT,
+                    stars INTEGER DEFAULT 3,
+                    updated_at TEXT
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_clip_stars ON clip_preferences(stars);")
             conn.commit()
         finally:
             conn.close()
@@ -396,6 +406,136 @@ def get_clip_metadata(mp4_path: Path | str, generate_ai: bool = True) -> Dict[st
     return meta
 
 
+def get_clip_stars(clip_id_or_name: str, default: int = 3) -> int:
+    """
+    Get 1-6 star priority rating for a clip.
+    6 stars = Top Tier (uploaded first)
+    5 stars = High Priority
+    ...
+    1 star = Marked for deletion
+    """
+    stem = Path(clip_id_or_name).stem
+    # 1. Check SQLite clip_preferences
+    with _DB_LOCK:
+        conn = _get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT stars FROM clip_preferences WHERE clip_id = ? OR file_name = ? OR file_name = ? LIMIT 1;",
+                (stem, stem, f"{stem}.mp4"),
+            )
+            row = cur.fetchone()
+            if row is not None and row[0] is not None:
+                return max(1, min(6, int(row[0])))
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    # 2. Check companion <stem>.json sidecar
+    json_path = DATA_DIR / f"{stem}.json"
+    if json_path.is_file():
+        try:
+            jdata = json.loads(json_path.read_text(encoding="utf-8"))
+            s = jdata.get("priority_stars") or jdata.get("stars") or jdata.get("settings", {}).get("priority_stars")
+            if s is not None:
+                return max(1, min(6, int(s)))
+        except Exception:
+            pass
+
+    return default
+
+
+def delete_clip_files(clip_id_or_name: str) -> bool:
+    """
+    Delete all files associated with a clip: .mp4, .json, .srt, .vtt, .part, etc.
+    Remove from preference table and mark as deleted in uploads ledger.
+    """
+    stem = Path(clip_id_or_name).stem
+    deleted_any = False
+    for ext in (".mp4", ".json", ".srt", ".vtt", ".part", ".ytdl"):
+        target = DATA_DIR / f"{stem}{ext}"
+        if target.is_file():
+            try:
+                target.unlink(missing_ok=True)
+                deleted_any = True
+            except OSError as e:
+                logger.warning(f"[Ledger] Could not delete {target.name}: {e}")
+
+    # Remove temporary or low-res files
+    for p in DATA_DIR.glob(f"*{stem}*"):
+        if p.is_file() and p.name != f"{stem}.mp4":
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    with _DB_LOCK:
+        conn = _get_connection()
+        try:
+            conn.execute("DELETE FROM clip_preferences WHERE clip_id = ? OR file_name = ?;", (stem, f"{stem}.mp4"))
+            conn.execute(
+                "UPDATE uploads SET status = 'deleted' WHERE file_name = ? OR file_path LIKE ?;",
+                (f"{stem}.mp4", f"%{stem}%"),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[Ledger] DB cleanup failed for {stem}: {e}")
+        finally:
+            conn.close()
+
+    logger.info(f"[Ledger] Deleted clip files and ledger records for {stem}")
+    return deleted_any
+
+
+def set_clip_stars(clip_id_or_name: str, stars: int) -> bool:
+    """
+    Set 1-6 star priority rating for a clip.
+    If stars == 1, immediately deletes the clip per requirement:
+    'which videos have 1 stars deleat them'
+    """
+    stem = Path(clip_id_or_name).stem
+    stars = max(1, min(6, int(stars)))
+
+    if stars == 1:
+        delete_clip_files(stem)
+        return True
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # 1. Update SQLite
+    with _DB_LOCK:
+        conn = _get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO clip_preferences (clip_id, file_name, stars, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(clip_id) DO UPDATE SET
+                    stars = excluded.stars,
+                    updated_at = excluded.updated_at;
+                """,
+                (stem, f"{stem}.mp4", stars, now_iso),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[Ledger] Failed to save clip preference: {e}")
+        finally:
+            conn.close()
+
+    # 2. Update companion <stem>.json
+    json_path = DATA_DIR / f"{stem}.json"
+    if json_path.is_file():
+        try:
+            jdata = json.loads(json_path.read_text(encoding="utf-8"))
+            jdata["priority_stars"] = stars
+            json_path.write_text(json.dumps(jdata, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"[Ledger] Could not update {json_path}: {e}")
+
+    logger.info(f"[Ledger] Set priority for {stem} to {stars} stars ⭐")
+    return True
+
+
 def get_pending_clips(
     data_dir: Path | str = DATA_DIR,
     platforms: Tuple[str, ...] = ("youtube", "instagram"),
@@ -404,7 +544,8 @@ def get_pending_clips(
     Scan data directory for true vertical 9:16 clips and return those that have
     NOT yet been uploaded to at least one of the specified platforms.
     Filters out raw stream downloads (> 250 MB or horizontal).
-    Sorts oldest first (FIFO).
+    Sorts descending by star rating (6 stars first, then 5, 4, 3, 2), then oldest first (FIFO).
+    Auto-deletes 1-star clips.
     """
     data_path = Path(data_dir)
     if not data_path.is_dir():
@@ -433,13 +574,36 @@ def get_pending_clips(
                 needed_platforms.append(p)
 
         if needed_platforms:
+            stars = get_clip_stars(f.stem, default=3)
+            if stars == 1:
+                # 1-star clips are deleted per requirement
+                delete_clip_files(f.stem)
+                continue
+
             meta = get_clip_metadata(f, generate_ai=False)
+
+            # Read chunk info if available
+            chunk_label = ""
+            chunk_range = ""
+            json_path = f.with_suffix(".json")
+            if json_path.is_file():
+                try:
+                    jdata = json.loads(json_path.read_text(encoding="utf-8"))
+                    settings = jdata.get("settings", {})
+                    chunk_label = jdata.get("chunk_label") or settings.get("chunk_label") or ""
+                    chunk_range = jdata.get("chunk_range") or settings.get("chunk_range") or ""
+                except Exception:
+                    pass
+
             pending.append({
                 "path": str(f.resolve()),
                 "file_name": f.name,
                 "file_size": f.stat().st_size,
                 "mtime": f.stat().st_mtime,
                 "needed_platforms": needed_platforms,
+                "stars": stars,
+                "chunk_label": chunk_label,
+                "chunk_range": chunk_range,
                 "title": meta["title"],
                 "hook": meta["hook"],
                 "youtube_description": meta["youtube_description"],
@@ -447,7 +611,8 @@ def get_pending_clips(
                 "caption": meta["instagram_caption"],
             })
 
-    pending.sort(key=lambda x: x["mtime"])
+    # Sort descending by stars (-stars: 6 stars first, then 5, 4, 3, 2), then oldest first (mtime)
+    pending.sort(key=lambda x: (-x.get("stars", 3), x["mtime"]))
     return pending
 
 

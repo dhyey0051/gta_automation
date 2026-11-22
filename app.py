@@ -82,14 +82,29 @@ def text_file(id:str,kind:str):
 def library():
  records=[]
  groups=app.reedit_groups()
+ from uploader import ledger
  for f in DATA.glob('*.json'):
   if f.name.endswith(('.state.json','.request.json','.words.json')) or f.name == 'upload_history.json':continue
   try:
-   j=json.loads(f.read_text())
+   j=json.loads(f.read_text(encoding='utf-8'))
    if not isinstance(j, dict): continue
    result=j.get('result',{})
    if result.get('status')=='done' and not j.get('superseded_by') and (DATA/(f.stem+'.mp4')).exists():
-    records.append({'id':f.stem,'title':j.get('settings',{}).get('title') or 'NeonClipping clip','created':f.stat().st_mtime,'meta':result.get('meta',{}),'settings':j.get('settings',{}),'srt':bool(result.get('srt')) and (DATA/(f.stem+'.srt')).exists(),**app.reedit_metadata(f.stem,j,groups)})
+    st=j.get('settings',{})
+    stars=ledger.get_clip_stars(f.stem, default=3)
+    records.append({
+        'id':f.stem,
+        'title':st.get('title') or 'NeonClipping clip',
+        'created':f.stat().st_mtime,
+        'meta':result.get('meta',{}),
+        'settings':st,
+        'stars':stars,
+        'chunk_id':j.get('chunk_id') or st.get('chunk_id') or '',
+        'chunk_label':j.get('chunk_label') or st.get('chunk_label') or '',
+        'chunk_range':j.get('chunk_range') or st.get('chunk_range') or '',
+        'srt':bool(result.get('srt')) and (DATA/(f.stem+'.srt')).exists(),
+        **app.reedit_metadata(f.stem,j,groups)
+    })
   except (AttributeError,TypeError,ValueError,OSError):pass
  return sorted(records,key=lambda j:j['created'],reverse=True)
 
@@ -250,8 +265,34 @@ def probe_chunks(body:dict):
   num_chunks=int(math.ceil(duration/chunk_size))
   for i in range(num_chunks):
    s=i*chunk_size;e=min(duration,(i+1)*chunk_size)
-   chunks.append({'id':f'{i}-{i+1}','label':f'Hour {i}-{i+1} ({_format_time(s)} - {_format_time(e)})','short_label':f'Hour {i}-{i+1}','start':s,'end':e})
- chunks.insert(0,{'id':'all','label':f'Full Video (00:00 - {dur_str})','short_label':'All Video','start':0,'end':duration})
+   chunks.append({'id':f'{i}-{i+1}','index':i,'label':f'Hour {i}-{i+1} ({_format_time(s)} - {_format_time(e)})','short_label':f'Hour {i}-{i+1}','start':s,'end':e,'clips_count':0})
+ elif duration>900:
+  part_size=900
+  num_parts=int(math.ceil(duration/part_size))
+  for i in range(num_parts):
+   s=i*part_size;e=min(duration,(i+1)*part_size)
+   chunks.append({'id':f'p{i+1}','index':i,'label':f'Part {i+1} ({_format_time(s)} - {_format_time(e)})','short_label':f'Part {i+1}','start':s,'end':e,'clips_count':0})
+
+ # Count existing clips in DATA for each chunk of this video
+ for f in DATA.glob('*.json'):
+  if f.name.endswith(('.state.json','.request.json','.words.json')) or f.name=='upload_history.json':continue
+  try:
+   j=json.loads(f.read_text(encoding='utf-8'))
+   if not isinstance(j,dict):continue
+   st=j.get('settings',{})
+   c_url=st.get('source_url') or ''
+   if c_url and (c_url==url or (info.get('id') and info['id'] in c_url)):
+    cid=st.get('chunk_id')
+    c_st=float(st.get('start',0))
+    for ch in chunks:
+     if cid and ch['id']==cid:
+      ch['clips_count']+=1
+     elif ch['start']<=c_st<ch['end']:
+      ch['clips_count']+=1
+  except Exception:pass
+
+ total_pulled=sum(c['clips_count'] for c in chunks)
+ chunks.insert(0,{'id':'all','index':-1,'label':f'Full Video (00:00 - {dur_str})','short_label':'All Video','start':0,'end':duration,'clips_count':total_pulled})
  return {'title':title,'duration':duration,'duration_str':dur_str,'is_live':is_live,'chunks':chunks}
 
 @app.post('/make')
@@ -437,8 +478,12 @@ def make(b:dict):
       if fco.get('found'):cam_use,game_use=fco['cam'],fco.get('game',game_use)
     except Exception as e:save(job,{'facecam':{'found':False,'reason':'tracking failed: '+str(e)[:80]}})
     lang=language or ('hinglish' if (video_lang.startswith('hi') or c.get('language')=='hi') else None)
+    c_label = b.get('chunk_label') or (f"Hour {int(c_start//3600)}-{int(actual_end//3600)}" if is_chunked else 'Full Video')
+    c_id = b.get('chunk_id') or (f"{int(c_start//3600)}-{int(actual_end//3600)}" if is_chunked else 'all')
+    c_range = b.get('chunk_range') or (f"{_format_time(c_start)} - {_format_time(actual_end)}" if is_chunked else f"00:00 - {_format_time(total_dur)}")
     body={'id':sid2,'start':start,'end':end,'layout':layout,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .35),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
-          'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':c.get('title',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
+          'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':c.get('title',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review'),
+          'chunk_id':c_id,'chunk_label':c_label,'chunk_range':c_range}
     for k in styling.KEYS+brands.KEYS+hooks.KEYS:
      if b.get(k) not in (None,''):body[k]=b[k]
     if b.get('credit_auto') and uploader and not body.get('credit'):body['credit']='Clip: '+uploader[:40]
@@ -457,7 +502,8 @@ def make(b:dict):
     while state.get(ej,{}).get('status')=='running':time.sleep(.7)
     r=state[ej]
     done.append({'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),
-                 'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
+                 'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review'),
+                 'chunk_id':c_id,'chunk_label':c_label,'chunk_range':c_range})
     save(job,{'clips':list(done),'stage':f'Rendered {i+1}/{len(found)}','progress':.6+.4*(i+1)/len(found)})
    save(job,{'status':'done','stage':'Clips ready','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
    if b.get('auto_upload') is not False and os.environ.get('NEONCLIPPING_AUTO_UPLOAD', '1') != '0':
@@ -661,6 +707,119 @@ vision.attach(app,DATA,state,probe)
 import creators
 creators.attach(app,DATA,LIVE,lambda target,opts,cid:start_live(target,opts,cid))
 
+@app.get('/preferences')
+def preferences_list_endpoint():
+    from datetime import datetime
+    from uploader import ledger
+    clips = []
+    for f in DATA.glob('*.mp4'):
+        if f.name.endswith('.temp.mp4') or '.audio.' in f.name:
+            continue
+        try:
+            sz = f.stat().st_size
+            if sz < 500 * 1024 or sz > 250 * 1024 * 1024:
+                continue
+        except OSError:
+            continue
+        if not ledger.is_vertical_clip(f):
+            continue
+
+        stem = f.stem
+        stars = ledger.get_clip_stars(stem, default=3)
+        if stars == 1:
+            ledger.delete_clip_files(stem)
+            continue
+
+        meta = ledger.get_clip_metadata(f, generate_ai=False)
+        chunk_label = ""
+        chunk_range = ""
+        chunk_id = ""
+        json_path = f.with_suffix('.json')
+        if json_path.is_file():
+            try:
+                jdata = json.loads(json_path.read_text(encoding='utf-8'))
+                settings = jdata.get('settings', {})
+                chunk_label = jdata.get('chunk_label') or settings.get('chunk_label') or ""
+                chunk_range = jdata.get('chunk_range') or settings.get('chunk_range') or ""
+                chunk_id = jdata.get('chunk_id') or settings.get('chunk_id') or ""
+            except Exception:
+                pass
+
+        yt_done = ledger.is_uploaded(f, 'youtube')
+        ig_done = ledger.is_uploaded(f, 'instagram')
+
+        clips.append({
+            'id': stem,
+            'file_name': f.name,
+            'file_size': f.stat().st_size,
+            'mtime': f.stat().st_mtime,
+            'created_str': datetime.fromtimestamp(f.stat().st_mtime).strftime('%Y-%m-%d %H:%M'),
+            'stars': stars,
+            'title': meta.get('title') or 'NeonClipping Clip',
+            'hook': meta.get('hook') or '',
+            'chunk_id': chunk_id,
+            'chunk_label': chunk_label,
+            'chunk_range': chunk_range,
+            'youtube_uploaded': yt_done,
+            'instagram_uploaded': ig_done,
+            'needs_upload': not (yt_done and ig_done),
+        })
+
+    # Sort descending by stars (-stars: 6 stars first, then 5, 4, 3, 2), then oldest first (mtime)
+    clips.sort(key=lambda x: (-x.get('stars', 3), x['mtime']))
+
+    q_pos = 1
+    for c in clips:
+        if c['needs_upload']:
+            c['queue_position'] = q_pos
+            q_pos += 1
+        else:
+            c['queue_position'] = None
+
+    return {'clips': clips, 'total': len(clips), 'pending_upload': q_pos - 1}
+
+@app.post('/preferences/rate')
+def preferences_rate_endpoint(b: dict):
+    from uploader import ledger
+    clip_id = str(b.get('clip_id') or '').strip()
+    if not clip_id:
+        raise HTTPException(400, 'clip_id is required')
+    try:
+        stars = int(b.get('stars', 3))
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'stars must be a number between 1 and 6')
+    if not 1 <= stars <= 6:
+        raise HTTPException(400, 'stars must be between 1 and 6')
+
+    if stars == 1:
+        ledger.delete_clip_files(clip_id)
+        return {'ok': True, 'deleted': True, 'clip_id': clip_id, 'message': 'Reel rated 1 star and deleted.'}
+
+    ok = ledger.set_clip_stars(clip_id, stars)
+    return {'ok': ok, 'deleted': False, 'clip_id': clip_id, 'stars': stars, 'message': f'Reel updated to {stars} stars.'}
+
+@app.post('/preferences/delete')
+def preferences_delete_endpoint(b: dict):
+    from uploader import ledger
+    clip_id = str(b.get('clip_id') or '').strip()
+    if not clip_id:
+        raise HTTPException(400, 'clip_id is required')
+    ok = ledger.delete_clip_files(clip_id)
+    return {'ok': True, 'deleted': clip_id, 'message': 'Reel deleted successfully.'}
+
+@app.post('/preferences/bulk_delete_1star')
+def preferences_bulk_delete_1star_endpoint():
+    from uploader import ledger
+    deleted_count = 0
+    for f in DATA.glob('*.mp4'):
+        if f.name.endswith('.temp.mp4') or '.audio.' in f.name:
+            continue
+        stars = ledger.get_clip_stars(f.stem, default=3)
+        if stars == 1:
+            if ledger.delete_clip_files(f.stem):
+                deleted_count += 1
+    return {'ok': True, 'deleted_count': deleted_count}
+
 @app.post('/publish')
 @app.post('/upload/publish')
 def upload_endpoint(b: dict):
@@ -708,6 +867,13 @@ def bot_trigger_endpoint():
     t = threading.Thread(target=bot.process_next_clip, kwargs={'platforms': ('youtube', 'instagram'), 'headless': True}, daemon=True)
     t.start()
     return {'ok': True, 'message': 'Upload cycle triggered.'}
+
+@app.on_event("startup")
+def startup_event():
+    if os.environ.get("NEONCLIPPING_START_BOT", "1") != "0":
+        from uploader import bot
+        import threading
+        threading.Timer(2.0, lambda: bot.start_bot_thread(interval_seconds=720)).start()
 
 if __name__=='__main__':
  lan=os.environ.get('NEONCLIPPING_LAN')=='1'      # phone remote: listen on the home network (PIN required, see phone.py); default is this PC only

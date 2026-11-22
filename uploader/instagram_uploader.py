@@ -33,9 +33,9 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-DEFAULT_PROFILE_DIR = Path(os.environ.get("INSTAGRAM_PROFILE_DIR", Path(__file__).resolve().parent.parent / "data" / "profiles" / "instagram"))
+DEFAULT_PROFILE_DIR = Path("G:/dhyey/automation/clipops/data/profiles/instagram__adg")
 INSTAGRAM_URL = "https://www.instagram.com"
-DEBUG_DIR = Path(__file__).resolve().parent.parent / "data" / "uploader_debug"
+DEBUG_DIR = Path("G:/dhyey/automation/neonclipping-main/data/uploader_debug")
 DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
 

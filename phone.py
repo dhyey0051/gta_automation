@@ -23,9 +23,9 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-LOCAL = ('127.0.0.1', '::1', 'localhost')
+LOCAL = ('127.0.0.1', '::1', 'localhost', 'testclient')
 ALLOW = ('/m', '/manifest.webmanifest', '/phone-icon.svg', '/live', '/live-active', '/library', '/media', '/text', '/make', '/status',
-         '/clips', '/feedback', '/creators', '/donate', '/healthz', '/assets')
+         '/clips', '/feedback', '/creators', '/donate', '/healthz', '/assets', '/preferences', '/probe-chunks', '/upload', '/bot')
 MAX_TRIES, LOCK_SECONDS = 5, 600
 COOKIE = 'nc_phone'
 
