@@ -17,7 +17,7 @@ from pathlib import Path
 
 KEYS = ('template', 'tpl_name', 'tpl_handle', 'bg_mode', 'bg_color', 'bg_color2', 'bg_image', 'bg_dim', 'bg_blur', 'padding', 'radius',
         'watermark_image', 'watermark_pos', 'watermark_size', 'watermark_opacity', 'credit', 'outro_text', 'outro_seconds',
-        'music', 'music_volume', 'music_peak', 'music_riser', 'caption_anim')
+        'music', 'music_volume', 'music_peak', 'music_riser', 'caption_anim', 'sticker_id')
 TEMPLATES = ('none', 'x_light', 'x_dark', 'tiktok_hook', 'breaking_news')
 BG_MODES = ('blur', 'color', 'gradient', 'image')
 WM_POS = ('tl', 'tr', 'bl', 'br')
@@ -127,6 +127,11 @@ class Plan:
         self.next_input = 1
         self.data = getattr(self, 'data', None)
         self.job = getattr(self, 'job', 'style')
+        self.sticker = getattr(self, 'sticker', None)
+        self.sticker_w = getattr(self, 'sticker_w', 0)
+        self.sticker_h = getattr(self, 'sticker_h', 0)
+        self.sticker_x = getattr(self, 'sticker_x', 0)
+        self.sticker_y = getattr(self, 'sticker_y', 0)
 
     # ---- ffmpeg inputs
     def add_input(self, args):
@@ -137,7 +142,7 @@ class Plan:
 
     @property
     def active(self):
-        return any((self.template != 'none', self.bg_mode, self.padding > 0, self.watermark, self.music, self.credit, self.outro_text))
+        return any((self.template != 'none', self.bg_mode, self.padding > 0, self.watermark, self.sticker, self.music, self.credit, self.outro_text))
 
     # ---- video graph
     def graph(self, base_graph, src, width, height, duration):
@@ -151,6 +156,22 @@ class Plan:
             g = self._template_graph(width, height)
         elif self.bg_mode or self.padding > 0:
             g = base_graph.replace('[base]', '[lay]') + ';' + self._card_graph(width, height, fps, duration)
+        if self.sticker:
+            from sticker_processor import calculate_placement
+            plc = calculate_placement(
+                layout=getattr(self, 'layout', 'stack'),
+                top=float(getattr(self, 'top', 0.35)),
+                video_w=width,
+                video_h=height,
+                sticker_path=self.sticker
+            )
+            self.sticker_x = plc['x']
+            self.sticker_y = plc['y']
+            self.sticker_w = plc['w']
+            self.sticker_h = plc['h']
+            idx = self.add_input(['-loop', '1', '-framerate', f'{fps:.3f}', '-i', str(self.sticker)])
+            g += (f';[{idx}:v]scale={self.sticker_w}:{self.sticker_h},format=rgba[stk]'
+                  f';[base][stk]overlay={self.sticker_x}:{self.sticker_y}:shortest=1[base_stk];[base_stk]null[base]')
         if self.watermark:
             idx = self.add_input(['-loop', '1', '-framerate', f'{fps:.3f}', '-i', str(self.watermark)])
             w = max(16, int(width * self.watermark_size / 100) // 2 * 2)
@@ -377,6 +398,15 @@ def plan(body, data):
         raise ValueError('Upload a background image first.')
     if spec['bg_mode'] and spec['padding'] == 0 and spec['bg_mode'] != 'blur' and template == 'none':
         spec['padding'] = 6      # a background is only visible around a padded card
+    sticker_id = body.get('sticker_id')
+    spec['sticker'] = None
+    if sticker_id:
+        from sticker_processor import get_sticker_file
+        stk_p = get_sticker_file(data, str(sticker_id))
+        if stk_p and stk_p.exists():
+            spec['sticker'] = stk_p
+            spec['layout'] = body.get('layout', 'stack')
+            spec['top'] = float(body.get('top', 0.35))
     p = Plan(spec)
     return p if p.active else None
 

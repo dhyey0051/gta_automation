@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id),v=$('video'),c=$('source'),ctx=c.getContext('2d'),pc=$('preview').getContext('2d');
-let id=null,still=null,sourceW=0,sourceH=0,sourceDuration=0,mode='cam',layout='stack',style='gta',drag=null,highlights=[],words=null,wordRange='',pendingImport=null,importToken=0,selectedTime=0;
+let id=null,still=null,sourceW=0,sourceH=0,sourceDuration=0,mode='cam',layout='stack',style='gta',drag=null,highlights=[],words=null,wordRange='',pendingImport=null,importToken=0,selectedTime=0,currentStickerId=null;
 let rectEdited=false,layoutClicked=false,layoutSpecs={},editingClip=null,layoutLoadSerial=0,savedRange=null;
 let rect={cam:{x:0,y:0,w:.25,h:.3},game:{x:.25,y:0,w:.75,h:1}};
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -28,6 +28,39 @@ $('link').onclick=async()=>{
  if(token===importToken&&id&&$('auto-analyze').checked&&!$('analyze').disabled)await $('analyze').onclick();
 };
 $('file').onchange=async()=>{try{if(!$('file').files[0])return;++importToken;pendingImport=null;id=null;still=null;$('link').disabled=false;$('frames').replaceChildren();status('Uploading source…');const form=new FormData();form.append('file',$('file').files[0]);const response=await fetch('/upload',{method:'POST',body:form});const j=await response.json();if(!response.ok)throw Error(j.detail);$('url').value='';setSource(j);setRange(0,Math.min(30,j.duration));$('link-status').textContent='File ready';status('Draw the facecam and gameplay areas.');}catch(e){status(e.message);}};
+const stickerFile=$('sticker-file'),stickerWrap=$('sticker-preview-wrap'),stickerImg=$('sticker-preview-img'),stickerLoad=$('sticker-loading'),stickerBadge=$('sticker-status-badge'),stickerMeta=$('sticker-meta-text'),stickerClr=$('sticker-clear-btn');
+if(stickerFile){
+ stickerFile.onchange=async()=>{
+  const file=stickerFile.files[0];if(!file)return;
+  if(stickerLoad)stickerLoad.hidden=false;
+  if(stickerBadge){stickerBadge.textContent='Processing sticker…';stickerBadge.style.color='var(--cyan)';}
+  try{
+   const fd=new FormData();fd.append('file',file);
+   const res=await fetch('/sticker/upload',{method:'POST',body:fd});
+   if(!res.ok){const err=await res.json();throw new Error(err.detail||'Upload failed');}
+   const data=await res.json();
+   if(data.ok&&data.sticker){
+    currentStickerId=data.sticker.id;
+    if(stickerImg)stickerImg.src=data.sticker.preview_url+'?t='+Date.now();
+    if(stickerWrap)stickerWrap.hidden=false;
+    if(stickerMeta)stickerMeta.textContent=`${data.sticker.width} × ${data.sticker.height} px · On divider seam`;
+    if(stickerBadge){stickerBadge.textContent='✓ Active on clips';stickerBadge.style.color='var(--lime)';}
+    status('✨ Streamer sticker processed! Borders trimmed & background made transparent.');
+   }
+  }catch(err){status('Sticker error: '+err.message);if(stickerBadge){stickerBadge.textContent='Upload failed';stickerBadge.style.color='#ff6666';}}
+  finally{if(stickerLoad)stickerLoad.hidden=true;stickerFile.value='';}
+ };
+}
+if(stickerClr){
+ stickerClr.onclick=async()=>{
+  if(currentStickerId){try{await fetch('/sticker/'+currentStickerId,{method:'DELETE'});}catch(_){}}
+  currentStickerId=null;
+  if(stickerWrap)stickerWrap.hidden=true;
+  if(stickerImg)stickerImg.src='';
+  if(stickerBadge){stickerBadge.textContent='No sticker uploaded';stickerBadge.style.color='var(--muted)';}
+  status('Sticker removed. Clips will render normally without sticker.');
+ };
+}
 function showHighlights(jobs){highlights=jobs.flatMap(job=>(job.clips||[]).map(clip=>({...clip,job:job.job||job.id,video:job.title})));highlights=highlights.filter(h=>Number.isFinite(h.start)&&Number.isFinite(h.end));const select=$('recent');select.replaceChildren();if(!highlights.length){const option=document.createElement('option');option.textContent='No highlights yet — add a video and Find highlights';select.append(option);}highlights.forEach((h,index)=>{const option=document.createElement('option');option.value=index;option.textContent=h.start.toFixed(1)+'–'+h.end.toFixed(1)+'s · '+h.title+(h.score!==undefined?' · activity '+h.score:'');select.append(option);});}
 async function openHighlight(){const h=highlights[Number($('recent').value)];if(!h)return;const j=await request('/highlight-source',{job:h.job});setSource(j,h.start);setRange(h.start,h.end);status('Moment loaded. Review the source and selected areas.');}
 $('import').onclick=()=>openHighlight().catch(e=>status(e.message));
@@ -48,7 +81,7 @@ function collectWords(){if(words&&wordRange===signature()){const duration=Number
 function renderWords(){const editor=$('words');editor.replaceChildren();const timing=$('timing-editor')?.checked;editor.classList.toggle('timing',timing);for(const word of words||[]){const input=document.createElement('input');input.value=word.text;input.title=word.start.toFixed(2)+'–'+word.end.toFixed(2)+'s';input.oninput=()=>word.text=input.value;if(!timing){editor.append(input);continue;}const row=document.createElement('div');row.className='word-timing';row.append(input);for(const key of ['start','end']){const field=document.createElement('input');field.type='number';field.step='.01';field.min='0';field.value=Math.round(word[key]*1000)/1000;field.setAttribute('aria-label',key+' '+word.text);field.onchange=()=>{word[key]=Number(field.value);field.setAttribute('aria-invalid',String(!Number.isFinite(word[key])||word.start<0||word.end<=word.start));};row.append(field);}const merge=document.createElement('button');merge.textContent='Merge next';const index=words.indexOf(word);merge.disabled=index===words.length-1;merge.onclick=()=>{const next=words[index+1];words.splice(index,2,{start:Math.min(word.start,next.start),end:Math.max(word.end,next.end),text:word.text+' '+next.text});renderWords();};const split=document.createElement('button');split.textContent='Split words';split.onclick=()=>{const tokens=word.text.trim().split(/\s+/);if(tokens.length<2){status('Type two or more words in this row to split it.');return;}const total=tokens.reduce((n,t)=>n+t.length+1,0);let time=word.start;const parts=tokens.map(t=>{const start=time;time+=(word.end-word.start)*(t.length+1)/total;return{start,end:time,text:t};});words.splice(index,1,...parts);renderWords();status('Words split with estimated within-cue timings; review them before applying.');};row.append(merge,split);editor.append(row);}}
 async function generateSubtitles(){await requireSource();status('Starting local subtitles…');const range=signature();const {job}=await request('/transcribe',{id,start:Number($('start').value),end:Number($('end').value),language:$('language').value});for(;;){const s=await request('/status/'+job);status(s.message||s.status);if(s.status==='error')throw Error(s.error);if(s.status==='done'){if(signature()!==range)throw Error('Selected range changed. Generate subtitles for the current range.');words=s.words;wordRange=range;renderWords();const text=words.map(w=>w.text).join(' ');if(!$('clip-title').value)$('clip-title').value=text.split(/\s+/).slice(0,9).join(' ');if(!$('post-caption').value)$('post-caption').value=text.slice(0,220)+(text.length>220?'…':'')+'\n\n#Gaming #Clips';status(words.length?'Subtitles ready. Edit any word before exporting.':'No speech detected in this range.');return;}await sleep(1100);}}
 $('transcribe').onclick=async()=>{$('transcribe').disabled=true;try{await generateSubtitles();}catch(e){status(e.message);}finally{$('transcribe').disabled=false;}};
-function exportSettings(source,start,end){const b={id:source,...rect,layout,aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),top:Number($('top').value)/100,start,end,captions:$('captions').checked,caption_style:style,caption_y:Number($('caption-y').value),language:$('language').value,hook:$('hook').value,title:$('clip-title').value,post_caption:$('post-caption').value};if(source===id&&start===Number($('start').value)&&end===Number($('end').value)){const edited=collectWords();if(edited!==null)b.words=edited;}return b;}
+function exportSettings(source,start,end){const b={id:source,...rect,layout,aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),top:Number($('top').value)/100,start,end,captions:$('captions').checked,caption_style:style,caption_y:Number($('caption-y').value),language:$('language').value,hook:$('hook').value,title:$('clip-title').value,post_caption:$('post-caption').value,sticker_id:currentStickerId||null};if(source===id&&start===Number($('start').value)&&end===Number($('end').value)){const edited=collectWords();if(edited!==null)b.words=edited;}return b;}
 async function runExport(body,prefix=''){const {job}=await request('/export',body);for(;;){const s=await request('/status/'+job);status(prefix+(s.message||'Rendering…'));if(s.status==='error')throw Error(s.error);if(s.status==='done')return s;await sleep(1000);}}
 function showDownload(s){$('vtt').hidden=!s.srt;if(s.srt)$('vtt').href='/text/'+s.file+'/vtt';$('download').href='/media/'+s.file;$('download').hidden=false;$('srt').hidden=!s.srt;if(s.srt)$('srt').href=s.srt;}
 $('export').onclick=async()=>{const button=$('export');button.disabled=true;$('download').hidden=true;$('srt').hidden=true;try{await requireSource();const s=await runExport(exportSettings(id,Number($('start').value),Number($('end').value)));showDownload(s);status('Ready · '+s.meta.w+' × '+s.meta.h+' · '+s.encoder+' · '+s.caption_words+' caption words');await refreshLibrary();}catch(e){status(e.message);}finally{button.disabled=false;}};
@@ -478,7 +511,7 @@ if($('bot-trigger-btn')){$('bot-trigger-btn').onclick=async()=>{
 $('make').onclick=async()=>{const url=$('url').value.trim();if(!url&&!id){status('Paste a video link or upload a file first.');return;}
  const b=$('make');b.disabled=true;$('make-results').hidden=false;$('make-results').querySelector('.star-ask')?.remove();$('make-grid').replaceChildren();$('make-progress').style.width='2%';
  const chosenCount=Number(($('quick-count')||{}).value)||Number($('count').value)||4;
- try{const {job}=await request('/make',{...(url?{url}:{id}),chunk_start:(selectedChunk?selectedChunk.start:null),chunk_end:(selectedChunk&&selectedChunk.id!=='all'?selectedChunk.end:null),chunk_id:(selectedChunk?selectedChunk.id:null),chunk_label:(selectedChunk?selectedChunk.label:null),chunk_range:(selectedChunk?selectedChunk.range:null),auto_upload:$('auto-upload')?$('auto-upload').checked:true,count:chosenCount,mode:$('mode').value,source_height:Number(($('srcq')||{}).value)||1080,accurate:$('accurate').value,min_len:Number($('minlen').value),max_len:Number($('length').value),layout:makeLayout(),aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),cam:rect.cam,game:rect.game,top:Number($('top').value)/100,caption_style:style,language:$('language').value==='auto'?'':$('language').value});
+ try{const {job}=await request('/make',{...(url?{url}:{id}),chunk_start:(selectedChunk?selectedChunk.start:null),chunk_end:(selectedChunk&&selectedChunk.id!=='all'?selectedChunk.end:null),chunk_id:(selectedChunk?selectedChunk.id:null),chunk_label:(selectedChunk?selectedChunk.label:null),chunk_range:(selectedChunk?selectedChunk.range:null),auto_upload:$('auto-upload')?$('auto-upload').checked:true,count:chosenCount,mode:$('mode').value,source_height:Number(($('srcq')||{}).value)||1080,accurate:$('accurate').value,min_len:Number($('minlen').value),max_len:Number($('length').value),layout:makeLayout(),aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),cam:rect.cam,game:rect.game,top:Number($('top').value)/100,caption_style:style,language:$('language').value==='auto'?'':$('language').value,sticker_id:currentStickerId||null});
   const shown=new Set();
   for(;;){const s=await request('/make/'+job);$('make-status').textContent=(s.stage||s.status)+' · '+Math.round((s.progress||0)*100)+'%';$('make-progress').style.width=Math.max(2,(s.progress||0)*100)+'%';
    (s.clips||[]).forEach(c=>{if(shown.has(c.file))return;shown.add(c.file);const d=document.createElement('div');d.className='mk';d.dataset.file=c.file;

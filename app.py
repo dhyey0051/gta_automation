@@ -180,6 +180,10 @@ def export(b:dict):
    if plan:plan.data=DATA;plan.job=job;g2=plan.graph(graph,src,width,height,dur)
    placement=text_positions(layout,top,position,width,height);hook_y=placement['hook_y'];caption_pos=placement['caption_y'];hook_text=str(b.get('hook',''))
    if plan and plan.template!='none':caption_pos=plan.template_caption_y;hook_text=''
+   if plan and getattr(plan, 'sticker', None):
+    hook_y=max(hook_y, plan.sticker_y + plan.sticker_h + 30)
+    if caption_pos < hook_y + 80:
+     caption_pos = min(height - 120, hook_y + 120)
    ass,srt=write_captions(words,style,DATA,job,hook_text,caption_pos,hook_y,width,height,b.get('caption_anim') or 'pop_in',b)
    if words:
     (DATA/(job+'.vtt')).write_text(subtitles.write_track(subtitles.parse_track((DATA/srt).read_text(encoding='utf-8'),allow_overlap=True),'vtt',allow_overlap=True),encoding='utf-8')
@@ -884,6 +888,36 @@ def open_auth_endpoint(payload: dict = None):
         return {'ok': True, 'message': f'Launched visible browser for {platform} account login / channel switch.'}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+
+# --- Streamer Divider Sticker Endpoints ---
+@app.post('/sticker/upload')
+async def upload_sticker(file: UploadFile = File(...)):
+    import sticker_processor
+    try:
+        content = await file.read()
+        res = sticker_processor.clean_and_trim_sticker(content, DATA / 'stickers')
+        return {'ok': True, 'sticker': res}
+    except Exception as e:
+        raise HTTPException(400, f'Sticker processing failed: {str(e)}')
+
+@app.get('/sticker/{sticker_id}.png')
+def get_sticker(sticker_id: str):
+    import sticker_processor
+    p = sticker_processor.get_sticker_file(DATA, sticker_id)
+    if not p:
+        raise HTTPException(404, 'Sticker not found')
+    return FileResponse(p, media_type='image/png')
+
+@app.delete('/sticker/{sticker_id}')
+def delete_sticker(sticker_id: str):
+    import sticker_processor
+    p = sticker_processor.get_sticker_file(DATA, sticker_id)
+    if p and p.exists():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    return {'ok': True}
 
 @app.on_event("startup")
 def startup_event():

@@ -246,3 +246,36 @@ details.panel>summary{cursor:pointer;list-style:none;font-size:16px}details.pane
   text-overflow: ellipsis;
   line-height: 1.25;
 }
+
+/* --- Streamer Divider Sticker Card --- */
+.sticker-card {
+  margin-top: 14px;
+  padding: 13px 16px;
+  background: #140d21;
+  border: 1px solid #4a2c54;
+  border-radius: 11px;
+  transition: border-color 0.2s ease;
+}
+.sticker-card:hover {
+  border-color: #793c8c;
+}
+.sticker-btn {
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.sticker-btn:hover {
+  transform: translateY(-1px);
+  background: #361f4a !important;
+  border-color: var(--pink) !important;
+  box-shadow: 0 0 12px rgba(255, 75, 165, 0.25);
+}
+.sticker-preview-canvas {
+  width: 140px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-conic-gradient(#1c1426 0% 25%, #120d1a 0% 50%) 50% / 10px 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid #472c54;
+}
